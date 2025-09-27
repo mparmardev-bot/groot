@@ -1,80 +1,101 @@
 package com.example.groot
 
-import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.*
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import java.net.ConnectivityException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.IOException
 
-class LLMManager(private val context: Context) {
+class LLMManager {
+    private val client = OkHttpClient()
+    private val baseUrl = "http://10.0.2.2:11434" // For Android emulator
+    private val memoryManager = MemoryManager()
 
     companion object {
         private const val TAG = "LLMManager"
-        private const val LOCAL_BASE_URL = "http://10.103.5.234:8000/"
-        private const val CLOUD_FALLBACK_URL = "https://api-inference.huggingface.co/"
     }
 
-    private val localService: LLMService by lazy {
-        Retrofit.Builder()
-            .baseUrl(LOCAL_BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(LLMService::class.java)
-    }
+    data class LLMRequest(
+        val model: String,
+        val prompt: String,
+        val stream: Boolean = false
+    )
 
-    suspend fun processVoiceCommand(command: String): LLMResponse? {
-        return try {
-            // Try local LLM first
-            val response = localService.processCommand(LLMRequest(command))
-            if (response.isSuccessful) {
-                response.body()
+    suspend fun generateResponse(prompt: String): String = withContext(Dispatchers.IO) {
+        try {
+            // Add user input to memory
+            memoryManager.addConversation("User: $prompt")
+
+            // Get recent context for better responses
+            val context = memoryManager.getRecentContext(3)
+            val contextPrompt = if (context.isNotEmpty()) {
+                context.joinToString("\n") + "\nUser: $prompt"
             } else {
-                Log.e(TAG, "Local LLM failed: ${response.code()}")
-                createFallbackResponse(command)
+                prompt
+            }
+
+            val jsonBody = JSONObject().apply {
+                put("model", "gemma2:2b")
+                put("prompt", contextPrompt)
+                put("stream", false)
+            }
+
+            val requestBody = jsonBody.toString()
+                .toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url("$baseUrl/api/generate")
+                .post(requestBody)
+                .build()
+
+            Log.d(TAG, "Sending request to Ollama: $contextPrompt")
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IOException("Unexpected code $response")
+                }
+
+                val responseBody = response.body?.string() ?: ""
+                Log.d(TAG, "Raw response: $responseBody")
+
+                val jsonResponse = JSONObject(responseBody)
+                val generatedText = jsonResponse.getString("response")
+
+                // Add AI response to memory
+                memoryManager.addConversation("Assistant: $generatedText")
+
+                Log.d(TAG, "Generated response: $generatedText")
+                return@withContext generatedText
             }
         } catch (e: Exception) {
-            Log.e(TAG, "LLM request failed", e)
-            createFallbackResponse(command)
+            Log.e(TAG, "Error generating response", e)
+            return@withContext "I'm sorry, I'm having trouble connecting to my AI service. Please make sure Ollama is running and try again."
         }
     }
 
-    private fun createFallbackResponse(command: String): LLMResponse {
-        val lowerCommand = command.lowercase()
-
-        return when {
-            "call" in lowerCommand -> LLMResponse(
-                reply = "Making the call now",
-                action = "call",
-                target = extractTarget(lowerCommand, "call"),
-                emotion = "friendly",
-                confidence = 0.8
-            )
-            "turn on" in lowerCommand && "data" in lowerCommand -> LLMResponse(
-                reply = "Turning on mobile data",
-                action = "mobile_data",
-                target = "on",
-                emotion = "helpful",
-                confidence = 0.9
-            )
-            "search" in lowerCommand -> LLMResponse(
-                reply = "Searching for that",
-                action = "search",
-                target = extractTarget(lowerCommand, "search"),
-                emotion = "helpful",
-                confidence = 0.8
-            )
-            else -> LLMResponse(
-                reply = "I'm processing your request",
-                action = "none",
-                target = "",
-                emotion = "thoughtful",
-                confidence = 0.6
-            )
-        }
+    fun clearMemory() {
+        memoryManager.clearMemory()
     }
 
-    private fun extractTarget(command: String, action: String): String {
-        return command.substringAfter(action).trim().takeIf { it.isNotEmpty() } ?: "unknown"
+    suspend fun testConnection(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$baseUrl/api/version")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val isSuccessful = response.isSuccessful
+                Log.d(TAG, "Connection test: ${if (isSuccessful) "Success" else "Failed"}")
+                return@withContext isSuccessful
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Connection test failed", e)
+            return@withContext false
+        }
     }
 }

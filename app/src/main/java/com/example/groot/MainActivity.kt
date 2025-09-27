@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.RecognitionListener
@@ -11,11 +13,18 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
-import ai.picovoice.porcupine.*
+import com.example.groot.ui.theme.GrootTheme
 import java.util.*
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
@@ -25,25 +34,20 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         private const val PERMISSIONS_REQUEST_CODE = 1001
         private val REQUIRED_PERMISSIONS = arrayOf(
             Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.SEND_SMS,
-            Manifest.permission.CHANGE_NETWORK_STATE,
-            Manifest.permission.ACCESS_NETWORK_STATE,
-            Manifest.permission.ACCESS_WIFI_STATE,
-            Manifest.permission.CHANGE_WIFI_STATE,
-            Manifest.permission.WRITE_SETTINGS
+            Manifest.permission.INTERNET
         )
     }
 
     // Voice components
-    private var porcupineManager: PorcupineManager? = null
     private var speechRecognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
 
     // Core managers
     private lateinit var llmManager: LLMManager
-    private lateinit var taskAutomationManager: TaskAutomationManager
     private lateinit var memoryManager: MemoryManager
+
+    // Handler for delayed operations
+    private val handler = Handler(Looper.getMainLooper())
 
     // State
     private var isListening = false
@@ -56,14 +60,92 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         requestPermissions()
         initializeVoiceComponents()
 
+        // Set up Compose UI
+        setContent {
+            GrootTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    GrootUI()
+                }
+            }
+        }
+
         // Start the main service
         startService(Intent(this, GrootService::class.java))
     }
 
+    @Composable
+    private fun GrootUI() {
+        var messages by remember { mutableStateOf(listOf<String>()) }
+        var isConnected by remember { mutableStateOf(false) }
+
+        LaunchedEffect(Unit) {
+            // Test connection on startup
+            isConnected = llmManager.testConnection()
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "Groot AI Assistant",
+                style = MaterialTheme.typography.headlineMedium
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = if (isConnected) "Connected to Ollama" else "Connecting to Ollama...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = { startListeningForCommand() },
+                enabled = !isListening && !isProcessing
+            ) {
+                Text(if (isListening) "Listening..." else "Tap to Speak")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = { testLLMConnection() }
+            ) {
+                Text("Test AI Connection")
+            }
+
+            if (messages.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Recent Messages:", style = MaterialTheme.typography.titleSmall)
+                        messages.takeLast(3).forEach { message ->
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun initializeManagers() {
-        llmManager = LLMManager(this)
-        taskAutomationManager = TaskAutomationManager(this)
-        memoryManager = MemoryManager(this)
+        llmManager = LLMManager()
+        memoryManager = MemoryManager()
     }
 
     private fun requestPermissions() {
@@ -81,31 +163,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun initializeVoiceComponents() {
-        initializeHotwordDetection()
         initializeSpeechRecognizer()
         initializeTextToSpeech()
-    }
-
-    private fun initializeHotwordDetection() {
-        try {
-            porcupineManager = PorcupineManager.Builder()
-                .setKeywordPaths(arrayOf("hey_groot_android.ppn")) // Place in assets
-                .setSensitivities(floatArrayOf(0.7f))
-                .setCallback { keywordIndex ->
-                    runOnUiThread {
-                        onHotwordDetected()
-                    }
-                }
-                .build(this)
-
-            porcupineManager?.start()
-            Log.i(TAG, "Hotword detection started")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Hotword detection failed", e)
-            // Fallback: continuous listening without hotword
-            startContinuousListening()
-        }
     }
 
     private fun initializeSpeechRecognizer() {
@@ -182,11 +241,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun onHotwordDetected() {
-        Log.i(TAG, "Hey Groot detected!")
-        startListeningForCommand()
-    }
-
     private fun startListeningForCommand() {
         if (isListening || isProcessing) return
 
@@ -207,17 +261,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         Log.i(TAG, "Processing command: $command")
 
         // Store in memory for context
-        memoryManager.addConversation(command, "")
+        memoryManager.addConversation("User: $command")
 
         lifecycleScope.launch {
             try {
-                val response = llmManager.processVoiceCommand(command)
-                response?.let {
-                    handleLLMResponse(it, command)
-                } ?: run {
-                    speak("I'm sorry, I couldn't process that command")
-                    isProcessing = false
-                }
+                val response = llmManager.generateResponse(command)
+                handleLLMResponse(response, command)
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing command", e)
                 speak("I encountered an error processing your request")
@@ -226,63 +275,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun handleLLMResponse(response: LLMResponse, originalCommand: String) {
+    private fun handleLLMResponse(response: String, originalCommand: String) {
         Log.i(TAG, "LLM Response: $response")
 
         // Store response in memory
-        memoryManager.addConversation(originalCommand, response.reply)
-
-        // Set emotional TTS parameters
-        setEmotionalTTS(response.emotion)
+        memoryManager.addConversation("Assistant: $response")
 
         // Speak the response
-        speak(response.reply) {
-            // Execute action after speaking
-            executeAction(response)
-        }
-    }
-
-    private fun executeAction(response: LLMResponse) {
-        lifecycleScope.launch {
-            try {
-                taskAutomationManager.executeAction(
-                    response.action,
-                    response.target,
-                    response.confidence
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Error executing action", e)
-                speak("I couldn't complete that action")
-            } finally {
-                isProcessing = false
-            }
-        }
-    }
-
-    private fun setEmotionalTTS(emotion: String) {
-        tts?.apply {
-            when (emotion.lowercase()) {
-                "happy", "excited" -> {
-                    setPitch(1.2f)
-                    setSpeechRate(1.1f)
-                }
-                "sad", "apologetic" -> {
-                    setPitch(0.8f)
-                    setSpeechRate(0.9f)
-                }
-                "confident", "helpful" -> {
-                    setPitch(1.0f)
-                    setSpeechRate(1.0f)
-                }
-                "calm", "thoughtful" -> {
-                    setPitch(0.9f)
-                    setSpeechRate(0.8f)
-                }
-                else -> {
-                    setPitch(1.0f)
-                    setSpeechRate(1.0f)
-                }
-            }
+        speak(response) {
+            isProcessing = false
         }
     }
 
@@ -320,20 +321,32 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         // Small delay before restarting
         handler.postDelayed({
             if (!isProcessing && !isListening) {
-                try {
-                    porcupineManager?.stop()
-                    porcupineManager?.start()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error restarting hotword detection", e)
-                }
+                Log.d(TAG, "Restarting listening")
             }
         }, 1000)
     }
 
-    private fun startContinuousListening() {
-        // Fallback mode without hotword - tap to speak or continuous listening
-        Log.i(TAG, "Starting continuous listening mode")
-        // Implementation depends on your preference
+    private fun testLLMConnection() {
+        lifecycleScope.launch {
+            try {
+                val isConnected = llmManager.testConnection()
+                val message = if (isConnected) {
+                    "Connection successful! Testing AI response..."
+                } else {
+                    "Connection failed. Make sure Ollama is running."
+                }
+
+                speak(message)
+
+                if (isConnected) {
+                    val response = llmManager.generateResponse("Hello, please introduce yourself as Groot.")
+                    speak(response)
+                }
+            } catch (e: Exception) {
+                speak("Connection test failed: ${e.message}")
+                Log.e(TAG, "Connection test error", e)
+            }
+        }
     }
 
     override fun onInit(status: Int) {
@@ -343,7 +356,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                     Log.e(TAG, "TTS language not supported")
                 } else {
-                    speak("Groot is ready. Say Hey Groot to begin.")
+                    speak("Groot is ready. Tap the button to speak.")
                 }
             }
         } else {
@@ -355,8 +368,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         super.onDestroy()
 
         try {
-            porcupineManager?.stop()
-            porcupineManager?.delete()
             speechRecognizer?.destroy()
             tts?.shutdown()
         } catch (e: Exception) {
