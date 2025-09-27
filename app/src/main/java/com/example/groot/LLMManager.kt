@@ -12,7 +12,7 @@ import java.io.IOException
 
 class LLMManager {
     private val client = OkHttpClient()
-    private val baseUrl = "http://10.0.2.2:11434" // For Android emulator
+    private val baseUrl = "https://nonguttural-alveolarly-wesley.ngrok-free.dev" // For Android emulator
     private val memoryManager = MemoryManager()
 
     companion object {

@@ -34,7 +34,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         private const val PERMISSIONS_REQUEST_CODE = 1001
         private val REQUIRED_PERMISSIONS = arrayOf(
             Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.INTERNET
+            Manifest.permission.INTERNET,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.ACCESS_WIFI_STATE,
+            Manifest.permission.CHANGE_WIFI_STATE,
+            Manifest.permission.ACCESS_NETWORK_STATE,
+            Manifest.permission.CHANGE_NETWORK_STATE
         )
     }
 
@@ -45,6 +51,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     // Core managers
     private lateinit var llmManager: LLMManager
     private lateinit var memoryManager: MemoryManager
+    private lateinit var taskAutomationManager: TaskAutomationManager
 
     // Handler for delayed operations
     private val handler = Handler(Looper.getMainLooper())
@@ -123,6 +130,19 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 Text("Test AI Connection")
             }
 
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Test buttons for different commands
+            Row {
+                Button(onClick = { testVoiceCommand("call mom") }) {
+                    Text("Test Call")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(onClick = { testVoiceCommand("open chrome") }) {
+                    Text("Test App")
+                }
+            }
+
             if (messages.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Card(
@@ -146,6 +166,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun initializeManagers() {
         llmManager = LLMManager()
         memoryManager = MemoryManager()
+        taskAutomationManager = TaskAutomationManager(this)
     }
 
     private fun requestPermissions() {
@@ -179,9 +200,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     isListening = true
                 }
 
-                override fun onRmsChanged(rmsdB: Float) {
-                    // Optional: show voice activity indicator
-                }
+                override fun onRmsChanged(rmsdB: Float) {}
 
                 override fun onBufferReceived(buffer: ByteArray?) {}
 
@@ -193,7 +212,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 override fun onError(error: Int) {
                     Log.e(TAG, "Speech recognition error: $error")
                     isListening = false
-                    // Restart listening after error
                     if (!isProcessing) {
                         restartListening()
                     }
@@ -213,32 +231,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun initializeTextToSpeech() {
-        tts = TextToSpeech(this, this).apply {
-            setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    Log.d(TAG, "TTS started")
-                }
-
-                override fun onDone(utteranceId: String?) {
-                    Log.d(TAG, "TTS completed")
-                    // Resume listening after speaking
-                    runOnUiThread {
-                        if (!isProcessing) {
-                            restartListening()
-                        }
-                    }
-                }
-
-                override fun onError(utteranceId: String?) {
-                    Log.e(TAG, "TTS error")
-                    runOnUiThread {
-                        if (!isProcessing) {
-                            restartListening()
-                        }
-                    }
-                }
-            })
-        }
+        tts = TextToSpeech(this, this)
     }
 
     private fun startListeningForCommand() {
@@ -265,14 +258,89 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         lifecycleScope.launch {
             try {
-                val response = llmManager.generateResponse(command)
-                handleLLMResponse(response, command)
+                // Get AI response
+                val aiResponse = llmManager.generateResponse(buildSmartPrompt(command))
+
+                // Parse the response for actions
+                val actionData = parseActionFromResponse(command, aiResponse)
+
+                if (actionData.action.isNotEmpty()) {
+                    // Execute the action
+                    taskAutomationManager.executeAction(
+                        actionData.action,
+                        actionData.target,
+                        actionData.confidence
+                    )
+                    speak("${actionData.confirmation} $aiResponse") {
+                        isProcessing = false
+                    }
+                } else {
+                    // Just respond with AI text
+                    handleLLMResponse(aiResponse, command)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing command", e)
                 speak("I encountered an error processing your request")
                 isProcessing = false
             }
         }
+    }
+
+    private fun buildSmartPrompt(command: String): String {
+        return """
+        You are Groot, a helpful AI assistant. Analyze this command: "$command"
+        
+        If it's an action request (call, open app, toggle wifi/data, etc.), respond briefly and helpfully.
+        If it's a question or conversation, respond naturally as Groot would.
+        
+        Command: $command
+        """.trimIndent()
+    }
+
+    data class ActionData(
+        val action: String = "",
+        val target: String = "",
+        val confidence: Double = 0.0,
+        val confirmation: String = ""
+    )
+
+    private fun parseActionFromResponse(command: String, response: String): ActionData {
+        val lowerCommand = command.lowercase()
+
+        return when {
+            lowerCommand.contains("call") -> {
+                val target = extractTarget(lowerCommand, listOf("mom", "dad", "mother", "father"))
+                ActionData("call", target, 0.9, "Calling")
+            }
+            lowerCommand.contains("open") -> {
+                val target = extractTarget(lowerCommand, listOf("chrome", "youtube", "whatsapp", "gmail"))
+                ActionData("open_app", target, 0.9, "Opening")
+            }
+            lowerCommand.contains("wifi") -> {
+                val target = if (lowerCommand.contains("on") || lowerCommand.contains("enable")) "on" else "off"
+                ActionData("wifi", target, 0.8, "Toggling WiFi")
+            }
+            lowerCommand.contains("data") -> {
+                val target = if (lowerCommand.contains("on") || lowerCommand.contains("enable")) "on" else "off"
+                ActionData("mobile_data", target, 0.8, "Toggling mobile data")
+            }
+            lowerCommand.contains("hotspot") -> {
+                val target = if (lowerCommand.contains("on") || lowerCommand.contains("enable")) "on" else "off"
+                ActionData("hotspot", target, 0.8, "Toggling hotspot")
+            }
+            lowerCommand.contains("settings") -> {
+                ActionData("settings", "", 0.9, "Opening settings")
+            }
+            lowerCommand.contains("search") -> {
+                val query = command.substringAfter("search", "").trim()
+                ActionData("search", query, 0.8, "Searching for")
+            }
+            else -> ActionData() // No action, just conversation
+        }
+    }
+
+    private fun extractTarget(command: String, possibleTargets: List<String>): String {
+        return possibleTargets.find { command.contains(it) } ?: ""
     }
 
     private fun handleLLMResponse(response: String, originalCommand: String) {
@@ -285,6 +353,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         speak(response) {
             isProcessing = false
         }
+    }
+
+    private fun testVoiceCommand(command: String) {
+        processVoiceCommand(command)
     }
 
     private fun speak(text: String, onComplete: (() -> Unit)? = null) {
@@ -318,7 +390,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun restartListening() {
         if (isProcessing) return
 
-        // Small delay before restarting
         handler.postDelayed({
             if (!isProcessing && !isListening) {
                 Log.d(TAG, "Restarting listening")
