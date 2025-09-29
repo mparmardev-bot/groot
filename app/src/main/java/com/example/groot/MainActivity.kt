@@ -586,18 +586,28 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         tts?.let { textToSpeech ->
             val result = textToSpeech.setLanguage(Locale.US)
             
-            // VOICE CUSTOMIZATION - Change these values to adjust voice
-            textToSpeech.setPitch(0.7f)      // Lower = deeper voice (0.5 to 2.0)
-            textToSpeech.setSpeechRate(0.9f) // Lower = slower speech (0.5 to 2.0)
+            // Try to find and set a male voice
+            val voices = textToSpeech.voices
+            val maleVoice = voices?.find { voice ->
+                voice.name.contains("male", ignoreCase = true) && 
+                voice.locale.language == "en"
+            }
             
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Log.e(TAG, "TTS language not supported")
+            if (maleVoice != null) {
+                textToSpeech.voice = maleVoice
+                Log.d(TAG, "Set male voice: ${maleVoice.name}")
             } else {
+                Log.w(TAG, "No male voice found, using pitch adjustment")
+                // Fallback to pitch adjustment
+                textToSpeech.setPitch(0.6f) // Even lower for more masculine sound
+            }
+            
+            textToSpeech.setSpeechRate(0.9f)
+            
+            if (result != TextToSpeech.LANG_MISSING_DATA) {
                 speak("I am Groot, your AI assistant. Ready to help you.")
             }
         }
-    } else {
-        Log.e(TAG, "TTS initialization failed")
     }
 }
 
