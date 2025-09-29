@@ -457,7 +457,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            // Support both Hindi and English
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN,en-US")
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
         }
@@ -623,6 +626,18 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private fun speak(text: String, onComplete: (() -> Unit)? = null) {
         tts?.let { textToSpeech ->
+            // Detect language from text content and switch TTS language accordingly
+            val locale = when {
+                text.matches(Regex(".*[\\u0900-\\u097F].*")) -> Locale("hi", "IN") // Hindi Devanagari script
+                else -> Locale.US // English
+            }
+
+            // Set the detected language
+            val result = textToSpeech.setLanguage(locale)
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Log.w(TAG, "Language ${locale.language} not supported, using default")
+            }
+
             val utteranceId = UUID.randomUUID().toString()
 
             if (onComplete != null) {
@@ -684,13 +699,21 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts?.let { textToSpeech ->
-                val result = textToSpeech.setLanguage(Locale.US)
+                // Set Hindi as default language
+                val result = textToSpeech.setLanguage(Locale("hi", "IN"))
 
-                // Try to find and set a male voice
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    Log.w(TAG, "Hindi not available, falling back to English")
+                    textToSpeech.setLanguage(Locale.US)
+                }
+
+                // Try to find and set a male voice for current language
                 val voices = textToSpeech.voices
+                val currentLang = textToSpeech.language.language
+
                 val maleVoice = voices?.find { voice ->
                     voice.name.contains("male", ignoreCase = true) &&
-                            voice.locale.language == "en"
+                            voice.locale.language == currentLang
                 }
 
                 if (maleVoice != null) {
@@ -698,16 +721,19 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     Log.d(TAG, "Set male voice: ${maleVoice.name}")
                 } else {
                     Log.w(TAG, "No male voice found, using pitch adjustment")
-                    // Fallback to pitch adjustment
-                    textToSpeech.setPitch(0.6f) // Even lower for more masculine sound
+                    textToSpeech.setPitch(0.6f) // Lower pitch for masculine sound
                 }
 
                 textToSpeech.setSpeechRate(0.9f)
 
-                if (result != TextToSpeech.LANG_MISSING_DATA) {
+                if (result == TextToSpeech.SUCCESS) {
+                    speak("मैं ग्रूट हूं, आपका AI सहायक। आपकी मदद के लिए तैयार हूं।")
+                } else {
                     speak("I am Groot, your AI assistant. Ready to help you.")
                 }
             }
+        } else {
+            Log.e(TAG, "TTS initialization failed")
         }
     }
 
