@@ -415,42 +415,67 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         speechRecognizer?.startListening(intent)
     }
 
-    private fun processVoiceCommand(command: String) {
-        if (isProcessing) return
+    // Add this to your MainActivity class, replacing the existing processVoiceCommand method:
 
-        isProcessing = true
-        Log.i(TAG, "Processing command: $command")
+private fun processVoiceCommand(command: String) {
+    if (isProcessing) return
 
-        lifecycleScope.launch {
-            try {
-                // Get AI response
-                val aiResponse = llmManager.generateResponse(buildSmartPrompt(command))
+    isProcessing = true
+    Log.i(TAG, "Processing command: $command")
 
-                // Parse the response for actions
-                val actionData = parseActionFromResponse(command, aiResponse)
+    lifecycleScope.launch {
+        try {
+            // Send to FastAPI server
+            val jsonBody = JSONObject().apply {
+                put("text", command)
+                put("context", "mobile_assistant")
+            }
 
-                if (actionData.action.isNotEmpty()) {
-                    // Execute the action
-                    Log.i(TAG, "Executing action: ${actionData.action} -> ${actionData.target}")
-                    taskAutomationManager.executeAction(
-                        actionData.action,
-                        actionData.target,
-                        actionData.confidence
-                    )
-                    speak("${actionData.confirmation}. $aiResponse") {
+            val requestBody = jsonBody.toString()
+                .toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url("${llmManager.baseUrl}/query")
+                .post(requestBody)
+                .addHeader("Content-Type", "application/json")
+                .build()
+
+            llmManager.client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: ""
+                    val jsonResponse = JSONObject(responseBody)
+                    
+                    val reply = jsonResponse.getString("reply")
+                    val action = jsonResponse.getString("action")
+                    val target = jsonResponse.getString("target")
+                    val confidence = jsonResponse.getDouble("confidence")
+                    
+                    Log.i(TAG, "Server response - Reply: $reply, Action: $action, Target: $target")
+                    
+                    // Execute action if not "none"
+                    if (action != "none") {
+                        Log.i(TAG, "Executing action: $action with target: $target")
+                        taskAutomationManager.executeAction(action, target, confidence)
+                    }
+                    
+                    // Speak the response
+                    speak(reply) {
                         isProcessing = false
                     }
                 } else {
-                    // Just respond with AI text
-                    handleLLMResponse(aiResponse, command)
+                    speak("Sorry, I couldn't process that request") {
+                        isProcessing = false
+                    }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error processing command", e)
-                speak("I encountered an error: ${e.message}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error processing command", e)
+            speak("I encountered an error: ${e.message}") {
                 isProcessing = false
             }
         }
     }
+}
 
     private fun buildSmartPrompt(command: String): String {
         return """
