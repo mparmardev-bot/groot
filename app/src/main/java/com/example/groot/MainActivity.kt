@@ -28,6 +28,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import com.example.groot.ui.theme.GrootTheme
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Request
+import org.json.JSONObject
 import java.util.*
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
@@ -62,6 +66,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     // State
     private var isListening = false
     private var isProcessing = false
+    private var isListeningContinuously = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,6 +97,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         var isConnected by remember { mutableStateOf(false) }
         var connectionStatus by remember { mutableStateOf("Testing connection...") }
         var lastCommand by remember { mutableStateOf("") }
+        var isContinuousMode by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
             // Test connection on startup
@@ -155,7 +161,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             // Main Voice Button
             Button(
                 onClick = { startListeningForCommand() },
-                enabled = !isListening && !isProcessing && isConnected,
+                enabled = !isListening && !isProcessing && isConnected && !isContinuousMode,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(60.dp),
@@ -172,11 +178,33 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         isListening -> "🎤 Listening..."
                         isProcessing -> "⏳ Processing..."
                         !isConnected -> "❌ Not Connected"
+                        isContinuousMode -> "🎧 Continuous Mode Active"
                         else -> "🗣️ Tap to Speak"
                     },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Continuous Listening Toggle Button
+            Button(
+                onClick = {
+                    isContinuousMode = !isContinuousMode
+                    if (isContinuousMode) {
+                        startContinuousListening()
+                    } else {
+                        stopContinuousListening()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = isConnected,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isContinuousMode) Color.Green else MaterialTheme.colorScheme.secondary
+                )
+            ) {
+                Text(if (isContinuousMode) "🔊 Stop Continuous Mode" else "🎧 Enable Continuous Mode")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -233,7 +261,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Button(
-                    onClick = { testVoiceCommand("hello, introduce yourself") },
+                    onClick = {
+                        testVoiceCommand("hello, introduce yourself")
+                        lastCommand = "hello, introduce yourself"
+                    },
                     enabled = !isProcessing && isConnected,
                     modifier = Modifier.weight(1f)
                 ) {
@@ -243,7 +274,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 Spacer(modifier = Modifier.width(4.dp))
 
                 Button(
-                    onClick = { testVoiceCommand("call mom") },
+                    onClick = {
+                        testVoiceCommand("call mom")
+                        lastCommand = "call mom"
+                    },
                     enabled = !isProcessing && isConnected,
                     modifier = Modifier.weight(1f)
                 ) {
@@ -253,7 +287,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 Spacer(modifier = Modifier.width(4.dp))
 
                 Button(
-                    onClick = { testVoiceCommand("open chrome") },
+                    onClick = {
+                        testVoiceCommand("open chrome")
+                        lastCommand = "open chrome"
+                    },
                     enabled = !isProcessing && isConnected,
                     modifier = Modifier.weight(1f)
                 ) {
@@ -358,7 +395,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 override fun onError(error: Int) {
                     Log.e(TAG, "Speech recognition error: $error")
                     isListening = false
-                    if (!isProcessing) {
+
+                    // Restart continuous listening after error
+                    if (isListeningContinuously && !isProcessing) {
+                        handler.postDelayed({
+                            startVoiceActivatedListening()
+                        }, 2000)
+                    } else if (!isProcessing) {
                         restartListening()
                     }
                 }
@@ -367,6 +410,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     matches?.firstOrNull()?.let { command ->
                         processVoiceCommand(command)
+                    }
+
+                    // Restart listening if in continuous mode
+                    if (isListeningContinuously && !isProcessing) {
+                        handler.postDelayed({
+                            startVoiceActivatedListening()
+                        }, 1000)
                     }
                 }
 
@@ -377,30 +427,30 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun initializeTextToSpeech() {
-    tts = TextToSpeech(this, this).apply {
-        setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                Log.d(TAG, "TTS started")
-            }
+        tts = TextToSpeech(this, this).apply {
+            setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    Log.d(TAG, "TTS started")
+                }
 
-            override fun onDone(utteranceId: String?) {
-                Log.d(TAG, "TTS completed")
-                // Restart listening if in continuous mode
-                runOnUiThread {
-                    if (!isProcessing && isListeningContinuously) {
-                        handler.postDelayed({
-                            startVoiceActivatedListening()
-                        }, 1000)
+                override fun onDone(utteranceId: String?) {
+                    Log.d(TAG, "TTS completed")
+                    // Restart listening if in continuous mode
+                    runOnUiThread {
+                        if (!isProcessing && isListeningContinuously) {
+                            handler.postDelayed({
+                                startVoiceActivatedListening()
+                            }, 1000)
+                        }
                     }
                 }
-            }
 
-            override fun onError(utteranceId: String?) {
-                Log.e(TAG, "TTS error")
-            }
-        })
+                override fun onError(utteranceId: String?) {
+                    Log.e(TAG, "TTS error")
+                }
+            })
+        }
     }
-}
 
     private fun startListeningForCommand() {
         if (isListening || isProcessing) return
@@ -415,67 +465,92 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         speechRecognizer?.startListening(intent)
     }
 
-    // Add this to your MainActivity class, replacing the existing processVoiceCommand method:
+    private fun startContinuousListening() {
+        isListeningContinuously = true
+        startVoiceActivatedListening()
+        speak("Continuous listening activated. I'm always listening now.")
+    }
 
-private fun processVoiceCommand(command: String) {
-    if (isProcessing) return
+    private fun stopContinuousListening() {
+        isListeningContinuously = false
+        speechRecognizer?.stopListening()
+        speak("Continuous listening disabled.")
+    }
 
-    isProcessing = true
-    Log.i(TAG, "Processing command: $command")
+    private fun startVoiceActivatedListening() {
+        if (!isListeningContinuously || isProcessing) return
 
-    lifecycleScope.launch {
-        try {
-            // Send to FastAPI server
-            val jsonBody = JSONObject().apply {
-                put("text", command)
-                put("context", "mobile_assistant")
-            }
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
+        }
 
-            val requestBody = jsonBody.toString()
-                .toRequestBody("application/json".toMediaType())
+        speechRecognizer?.startListening(intent)
+    }
 
-            val request = Request.Builder()
-                .url("${llmManager.baseUrl}/query")
-                .post(requestBody)
-                .addHeader("Content-Type", "application/json")
-                .build()
+    private fun processVoiceCommand(command: String) {
+        if (isProcessing) return
 
-            llmManager.client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string() ?: ""
-                    val jsonResponse = JSONObject(responseBody)
-                    
-                    val reply = jsonResponse.getString("reply")
-                    val action = jsonResponse.getString("action")
-                    val target = jsonResponse.getString("target")
-                    val confidence = jsonResponse.getDouble("confidence")
-                    
-                    Log.i(TAG, "Server response - Reply: $reply, Action: $action, Target: $target")
-                    
-                    // Execute action if not "none"
-                    if (action != "none") {
-                        Log.i(TAG, "Executing action: $action with target: $target")
-                        taskAutomationManager.executeAction(action, target, confidence)
-                    }
-                    
-                    // Speak the response
-                    speak(reply) {
-                        isProcessing = false
-                    }
-                } else {
-                    speak("Sorry, I couldn't process that request") {
-                        isProcessing = false
+        isProcessing = true
+        Log.i(TAG, "Processing command: $command")
+
+        lifecycleScope.launch {
+            try {
+                // Send to FastAPI server
+                val jsonBody = JSONObject().apply {
+                    put("text", command)
+                    put("context", "mobile_assistant")
+                }
+
+                val requestBody = jsonBody.toString()
+                    .toRequestBody("application/json".toMediaType())
+
+                val request = Request.Builder()
+                    .url("http://10.98.214.234:8000/query")
+                    .post(requestBody)
+                    .addHeader("Content-Type", "application/json")
+                    .build()
+
+                llmManager.client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val responseBody = response.body?.string() ?: ""
+                        val jsonResponse = JSONObject(responseBody)
+
+                        val reply = jsonResponse.getString("reply")
+                        val action = jsonResponse.getString("action")
+                        val target = jsonResponse.getString("target")
+                        val confidence = jsonResponse.getDouble("confidence")
+
+                        Log.i(TAG, "Server response - Reply: $reply, Action: $action, Target: $target")
+
+                        // Execute action if not "none"
+                        if (action != "none") {
+                            Log.i(TAG, "Executing action: $action with target: $target")
+                            taskAutomationManager.executeAction(action, target, confidence)
+                        }
+
+                        // Speak the response
+                        speak(reply) {
+                            isProcessing = false
+                        }
+                    } else {
+                        speak("Sorry, I couldn't process that request") {
+                            isProcessing = false
+                        }
                     }
                 }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error processing command", e)
-            speak("I encountered an error: ${e.message}") {
-                isProcessing = false
+            } catch (e: Exception) {
+                Log.e(TAG, "Error processing command", e)
+                speak("I encountered an error: ${e.message}") {
+                    isProcessing = false
+                }
             }
         }
     }
-}
 
     private fun buildSmartPrompt(command: String): String {
         return """
@@ -534,7 +609,7 @@ private fun processVoiceCommand(command: String) {
         return possibleTargets.find { command.contains(it) } ?: ""
     }
 
-    private fun handleLLMResponse(response: String, originalCommand: String) {
+    private fun handleLLMResponse(response: String) {
         Log.i(TAG, "LLM Response: $response")
         speak(response) {
             isProcessing = false
@@ -607,38 +682,39 @@ private fun processVoiceCommand(command: String) {
     }
 
     override fun onInit(status: Int) {
-    if (status == TextToSpeech.SUCCESS) {
-        tts?.let { textToSpeech ->
-            val result = textToSpeech.setLanguage(Locale.US)
-            
-            // Try to find and set a male voice
-            val voices = textToSpeech.voices
-            val maleVoice = voices?.find { voice ->
-                voice.name.contains("male", ignoreCase = true) && 
-                voice.locale.language == "en"
-            }
-            
-            if (maleVoice != null) {
-                textToSpeech.voice = maleVoice
-                Log.d(TAG, "Set male voice: ${maleVoice.name}")
-            } else {
-                Log.w(TAG, "No male voice found, using pitch adjustment")
-                // Fallback to pitch adjustment
-                textToSpeech.setPitch(0.6f) // Even lower for more masculine sound
-            }
-            
-            textToSpeech.setSpeechRate(0.9f)
-            
-            if (result != TextToSpeech.LANG_MISSING_DATA) {
-                speak("I am Groot, your AI assistant. Ready to help you.")
+        if (status == TextToSpeech.SUCCESS) {
+            tts?.let { textToSpeech ->
+                val result = textToSpeech.setLanguage(Locale.US)
+
+                // Try to find and set a male voice
+                val voices = textToSpeech.voices
+                val maleVoice = voices?.find { voice ->
+                    voice.name.contains("male", ignoreCase = true) &&
+                            voice.locale.language == "en"
+                }
+
+                if (maleVoice != null) {
+                    textToSpeech.voice = maleVoice
+                    Log.d(TAG, "Set male voice: ${maleVoice.name}")
+                } else {
+                    Log.w(TAG, "No male voice found, using pitch adjustment")
+                    // Fallback to pitch adjustment
+                    textToSpeech.setPitch(0.6f) // Even lower for more masculine sound
+                }
+
+                textToSpeech.setSpeechRate(0.9f)
+
+                if (result != TextToSpeech.LANG_MISSING_DATA) {
+                    speak("I am Groot, your AI assistant. Ready to help you.")
+                }
             }
         }
     }
-}
 
     override fun onDestroy() {
         super.onDestroy()
         try {
+            isListeningContinuously = false
             speechRecognizer?.destroy()
             tts?.shutdown()
         } catch (e: Exception) {
