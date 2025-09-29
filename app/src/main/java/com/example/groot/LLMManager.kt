@@ -11,7 +11,7 @@ import org.json.JSONObject
 import java.io.IOException
 
 class LLMManager {
-    private val client = OkHttpClient()
+    val client = OkHttpClient()
     private val baseUrl = "https://nonguttural-alveolarly-wesley.ngrok-free.dev" // For Android emulator
     private val memoryManager = MemoryManager()
 
