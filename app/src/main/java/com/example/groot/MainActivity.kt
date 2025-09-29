@@ -15,10 +15,13 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -87,10 +90,18 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun GrootUI() {
         var messages by remember { mutableStateOf(listOf<String>()) }
         var isConnected by remember { mutableStateOf(false) }
+        var connectionStatus by remember { mutableStateOf("Testing connection...") }
+        var lastCommand by remember { mutableStateOf("") }
 
         LaunchedEffect(Unit) {
             // Test connection on startup
+            connectionStatus = "Connecting to Ollama..."
             isConnected = llmManager.testConnection()
+            connectionStatus = if (isConnected) {
+                "Connected to Ollama (gemma3:1b)"
+            } else {
+                "Failed to connect - Check Ollama"
+            }
         }
 
         Column(
@@ -100,59 +111,195 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // Header
             Text(
                 text = "Groot AI Assistant",
-                style = MaterialTheme.typography.headlineMedium
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text(
-                text = if (isConnected) "Connected to Ollama" else "Connecting to Ollama...",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-            )
+            // Connection Status Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isConnected)
+                        Color.Green.copy(alpha = 0.1f)
+                    else
+                        Color.Red.copy(alpha = 0.1f)
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = if (isConnected) "🟢" else "🔴",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    Text(
+                        text = connectionStatus,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isConnected)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.error
+                    )
+                }
+            }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
+            // Main Voice Button
             Button(
                 onClick = { startListeningForCommand() },
-                enabled = !isListening && !isProcessing
+                enabled = !isListening && !isProcessing && isConnected,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = when {
+                        isListening -> Color.Red
+                        isProcessing -> Color(0xFFFFA500) // Orange
+                        else -> MaterialTheme.colorScheme.primary
+                    }
+                )
             ) {
-                Text(if (isListening) "Listening..." else "Tap to Speak")
+                Text(
+                    text = when {
+                        isListening -> "🎤 Listening..."
+                        isProcessing -> "⏳ Processing..."
+                        !isConnected -> "❌ Not Connected"
+                        else -> "🗣️ Tap to Speak"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(
-                onClick = { testLLMConnection() }
+            // Control Buttons Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                Text("Test AI Connection")
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Test buttons for different commands
-            Row {
-                Button(onClick = { testVoiceCommand("call mom") }) {
-                    Text("Test Call")
+                Button(
+                    onClick = {
+                        lifecycleScope.launch {
+                            connectionStatus = "Testing..."
+                            isConnected = llmManager.testConnection()
+                            connectionStatus = if (isConnected) {
+                                "Connected to Ollama (gemma3:1b)"
+                            } else {
+                                "Connection failed"
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("🔄 Test")
                 }
+
                 Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = { testVoiceCommand("open chrome") }) {
-                    Text("Test App")
+
+                Button(
+                    onClick = {
+                        memoryManager.clearMemory()
+                        speak("Memory cleared")
+                        messages = emptyList()
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("🗑️ Clear")
                 }
             }
 
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Quick Test Buttons
+            Text(
+                text = "Quick Tests:",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Button(
+                    onClick = { testVoiceCommand("hello, introduce yourself") },
+                    enabled = !isProcessing && isConnected,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("👋 Hello")
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                Button(
+                    onClick = { testVoiceCommand("call mom") },
+                    enabled = !isProcessing && isConnected,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("📞 Call")
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                Button(
+                    onClick = { testVoiceCommand("open chrome") },
+                    enabled = !isProcessing && isConnected,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("🌐 Chrome")
+                }
+            }
+
+            // Last Command Display
+            if (lastCommand.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Last Command:",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = lastCommand,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            // Messages Display
             if (messages.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Card(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Recent Messages:", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = "Recent Activity:",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
                         messages.takeLast(3).forEach { message ->
                             Text(
-                                text = message,
+                                text = "• $message",
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(vertical = 2.dp)
                             )
@@ -201,7 +348,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 }
 
                 override fun onRmsChanged(rmsdB: Float) {}
-
                 override fun onBufferReceived(buffer: ByteArray?) {}
 
                 override fun onEndOfSpeech() {
@@ -231,8 +377,30 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun initializeTextToSpeech() {
-        tts = TextToSpeech(this, this)
+    tts = TextToSpeech(this, this).apply {
+        setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                Log.d(TAG, "TTS started")
+            }
+
+            override fun onDone(utteranceId: String?) {
+                Log.d(TAG, "TTS completed")
+                // Restart listening if in continuous mode
+                runOnUiThread {
+                    if (!isProcessing && isListeningContinuously) {
+                        handler.postDelayed({
+                            startVoiceActivatedListening()
+                        }, 1000)
+                    }
+                }
+            }
+
+            override fun onError(utteranceId: String?) {
+                Log.e(TAG, "TTS error")
+            }
+        })
     }
+}
 
     private fun startListeningForCommand() {
         if (isListening || isProcessing) return
@@ -253,9 +421,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         isProcessing = true
         Log.i(TAG, "Processing command: $command")
 
-        // Store in memory for context
-        memoryManager.addConversation("User: $command")
-
         lifecycleScope.launch {
             try {
                 // Get AI response
@@ -266,12 +431,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
                 if (actionData.action.isNotEmpty()) {
                     // Execute the action
+                    Log.i(TAG, "Executing action: ${actionData.action} -> ${actionData.target}")
                     taskAutomationManager.executeAction(
                         actionData.action,
                         actionData.target,
                         actionData.confidence
                     )
-                    speak("${actionData.confirmation} $aiResponse") {
+                    speak("${actionData.confirmation}. $aiResponse") {
                         isProcessing = false
                     }
                 } else {
@@ -280,7 +446,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing command", e)
-                speak("I encountered an error processing your request")
+                speak("I encountered an error: ${e.message}")
                 isProcessing = false
             }
         }
@@ -345,17 +511,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private fun handleLLMResponse(response: String, originalCommand: String) {
         Log.i(TAG, "LLM Response: $response")
-
-        // Store response in memory
-        memoryManager.addConversation("Assistant: $response")
-
-        // Speak the response
         speak(response) {
             isProcessing = false
         }
     }
 
     private fun testVoiceCommand(command: String) {
+        Log.i(TAG, "Testing command: $command")
         processVoiceCommand(command)
     }
 
@@ -389,7 +551,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private fun restartListening() {
         if (isProcessing) return
-
         handler.postDelayed({
             if (!isProcessing && !isListening) {
                 Log.d(TAG, "Restarting listening")
@@ -421,23 +582,27 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            tts?.let { textToSpeech ->
-                val result = textToSpeech.setLanguage(Locale.US)
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    Log.e(TAG, "TTS language not supported")
-                } else {
-                    speak("Groot is ready. Tap the button to speak.")
-                }
+    if (status == TextToSpeech.SUCCESS) {
+        tts?.let { textToSpeech ->
+            val result = textToSpeech.setLanguage(Locale.US)
+            
+            // VOICE CUSTOMIZATION - Change these values to adjust voice
+            textToSpeech.setPitch(0.7f)      // Lower = deeper voice (0.5 to 2.0)
+            textToSpeech.setSpeechRate(0.9f) // Lower = slower speech (0.5 to 2.0)
+            
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Log.e(TAG, "TTS language not supported")
+            } else {
+                speak("I am Groot, your AI assistant. Ready to help you.")
             }
-        } else {
-            Log.e(TAG, "TTS initialization failed")
         }
+    } else {
+        Log.e(TAG, "TTS initialization failed")
     }
+}
 
     override fun onDestroy() {
         super.onDestroy()
-
         try {
             speechRecognizer?.destroy()
             tts?.shutdown()
