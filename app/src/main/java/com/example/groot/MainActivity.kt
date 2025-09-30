@@ -427,7 +427,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun initializeTextToSpeech() {
-        tts = TextToSpeech(this, this).apply {
+        tts = TextToSpeech(this, this, "com.samsung.SMT").apply {
             setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     Log.d(TAG, "TTS started")
@@ -699,43 +699,61 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts?.let { textToSpeech ->
-                // Set Hindi as default language
-                val result = textToSpeech.setLanguage(Locale("hi", "IN"))
+
+                // 1️⃣ Try to set Hindi first
+                var result = textToSpeech.setLanguage(Locale("hi", "IN"))
+                var useHindi = true
 
                 if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    Log.w(TAG, "Hindi not available, falling back to English")
-                    textToSpeech.setLanguage(Locale.US)
+                    Log.w(TAG, "⚠️ Hindi not available, falling back to English (US)")
+                    result = textToSpeech.setLanguage(Locale.US)
+                    useHindi = false
                 }
 
-                // Try to find and set a male voice for current language
-                val voices = textToSpeech.voices
-                val currentLang = textToSpeech.language.language
+                // 2️⃣ Log all available voices for debugging
+                textToSpeech.voices?.forEach { voice ->
+                    Log.d(TAG, """
+                    Voice Name: ${voice.name}
+                    Locale: ${voice.locale}
+                    Quality: ${voice.quality}
+                    Requires Network: ${voice.isNetworkConnectionRequired}
+                    Features: ${voice.features}
+                """.trimIndent())
+                }
 
-                val maleVoice = voices?.find { voice ->
-                    voice.name.contains("male", ignoreCase = true) &&
-                            voice.locale.language == currentLang
+                // 3️⃣ Try to find a male voice for the current language
+                val currentLang = textToSpeech.language.language
+                val maleVoice = textToSpeech.voices?.find { voice ->
+                    voice.locale.language == currentLang &&
+                            voice.features.contains("male")
                 }
 
                 if (maleVoice != null) {
                     textToSpeech.voice = maleVoice
-                    Log.d(TAG, "Set male voice: ${maleVoice.name}")
+                    Log.d(TAG, "✅ Male voice set: ${maleVoice.name}")
                 } else {
-                    Log.w(TAG, "No male voice found, using pitch adjustment")
-                    textToSpeech.setPitch(0.6f) // Lower pitch for masculine sound
+                    Log.w(TAG, "⚠️ No male voice found, applying pitch fallback")
+                    textToSpeech.setPitch(0.85f) // Lower pitch for masculine sound
                 }
 
-                textToSpeech.setSpeechRate(0.9f)
+                // 4️⃣ Set speech rate for natural tone
+                textToSpeech.setSpeechRate(0.95f)
 
+                // 5️⃣ Speak sample line
                 if (result == TextToSpeech.SUCCESS) {
-                    speak("मैं ग्रूट हूं, आपका AI सहायक। आपकी मदद के लिए तैयार हूं।")
-                } else {
-                    speak("I am Groot, your AI assistant. Ready to help you.")
+                    if (useHindi) {
+                        speak("मैं ग्रूट हूं, आपका AI सहायक। आपकी मदद के लिए तैयार हूं।")
+                    } else {
+                        speak("I am Groot, your AI assistant. Ready to help you.")
+                    }
                 }
             }
         } else {
-            Log.e(TAG, "TTS initialization failed")
+            Log.e(TAG, "❌ TTS initialization failed")
         }
     }
+
+
 
     override fun onDestroy() {
         super.onDestroy()
