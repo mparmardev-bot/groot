@@ -2,8 +2,30 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
 import json
+import datetime
 import re
+import socket
 from typing import Optional
+
+def get_local_ip():
+    """Get the local IP address"""
+    try:
+        # Method 1: Connect to a remote address to determine local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        try:
+            # Method 2: Use hostname
+            return socket.gethostbyname(socket.gethostname())
+        except:
+            return "localhost"
+
+# Get local IP for external access, but use localhost for Ollama
+LOCAL_IP = get_local_ip()
+OLLAMA_URL = 'http://localhost:11434'  # Always use localhost for Ollama
 
 app = FastAPI(title="Smith Assistant API", version="1.0.0")
 
@@ -25,25 +47,26 @@ def query_gemma(user_input: str) -> dict:
 
 Analyze the user's command and provide a JSON response with exactly these fields:
 - "reply": A friendly, concise response (maximum 20 words)
-- "action": Choose ONE from [call, sms, search, open_app, mobile_data, hotspot, wifi, bluetooth, settings, none]
+- "action": Choose ONE from [call, sms, search, open_app, mobile_data, hotspot, wifi, bluetooth, settings, time, date, weather, none]
 - "target": The specific target for the action (phone number, search query, app name, contact name, etc.)
 - "emotion": Choose ONE from [happy, sad, excited, calm, confident, helpful, friendly, thoughtful, apologetic]
 - "confidence": A number between 0.0 and 1.0 indicating how confident you are about the action
 
 Examples:
 User: "Call mom" → {"reply": "Calling Mom now", "action": "call", "target": "mom", "emotion": "friendly", "confidence": 0.9}
-User: "Turn on mobile data" → {"reply": "Activating mobile data", "action": "mobile_data", "target": "on", "emotion": "helpful", "confidence": 0.95}
+User: "What time is it" → {"reply": "Let me check the time", "action": "time", "target": "", "emotion": "helpful", "confidence": 0.95}
+User: "How are you" → {"reply": "I'm doing great and ready to help!", "action": "none", "target": "", "emotion": "happy", "confidence": 0.9}
 
 CRITICAL: Respond with ONLY the JSON object, no other text."""
 
     prompt = f"{system_prompt}\n\nUser: \"{user_input}\"\n\nJSON:"
 
     try:
-        # Query Ollama with your gemma2:2b model
+        # Query Ollama using localhost (same machine)
         response = requests.post(
-            'http://localhost:11434/api/generate',
+            f'{OLLAMA_URL}/api/generate',
             json={
-                'model': 'gemma2:2b',
+                'model': 'gemma2:2b',  # Updated to your correct model
                 'prompt': prompt,
                 'stream': False,
                 'options': {
@@ -53,7 +76,7 @@ CRITICAL: Respond with ONLY the JSON object, no other text."""
                     'num_predict': 150
                 }
             },
-            timeout=30
+            timeout=90
         )
         
         if response.status_code != 200:
@@ -91,7 +114,23 @@ def parse_command_fallback(text: str) -> dict:
     """Fallback parser when Gemma fails"""
     text_lower = text.lower().strip()
     
-    if "call" in text_lower:
+    if "how are you" in text_lower:
+        return {
+            "reply": "I'm doing great and ready to help you!",
+            "action": "none",
+            "target": "",
+            "emotion": "friendly",
+            "confidence": 0.9
+        }
+    elif "time" in text_lower:
+        return {
+            "reply": "Let me check the current time for you",
+            "action": "time",
+            "target": "",
+            "emotion": "helpful",
+            "confidence": 0.9
+        }
+    elif "call" in text_lower:
         target = "mom" if "mom" in text_lower else "unknown"
         return {
             "reply": f"Calling {target}",
@@ -99,23 +138,6 @@ def parse_command_fallback(text: str) -> dict:
             "target": target,
             "emotion": "friendly",
             "confidence": 0.8
-        }
-    elif "search" in text_lower:
-        query = re.sub(r'search\s+(for\s+)?', '', text, flags=re.IGNORECASE).strip()
-        return {
-            "reply": f"Searching for {query}",
-            "action": "search",
-            "target": query if query else "general search",
-            "emotion": "helpful",
-            "confidence": 0.8
-        }
-    elif "turn on" in text_lower and "data" in text_lower:
-        return {
-            "reply": "Turning on mobile data",
-            "action": "mobile_data",
-            "target": "on",
-            "emotion": "helpful",
-            "confidence": 0.9
         }
     
     return {
@@ -128,18 +150,61 @@ def parse_command_fallback(text: str) -> dict:
 
 @app.get("/")
 def root():
-    return {"message": "Smith Assistant API is running", "status": "ready"}
+    return {
+        "message": "Smith Assistant API is running", 
+        "status": "ready",
+        "server_ip": LOCAL_IP,
+        "ollama_url": OLLAMA_URL
+    }
 
 @app.get("/health")
 def health_check():
     try:
-        test_response = requests.get('http://localhost:11434/api/tags', timeout=5)
+        test_response = requests.get(f'{OLLAMA_URL}/api/tags', timeout=5)
         if test_response.status_code == 200:
-            return {"status": "healthy", "ollama": "connected"}
+            return {
+                "status": "healthy", 
+                "ollama": "connected",
+                "server_ip": LOCAL_IP,
+                "ollama_url": OLLAMA_URL
+            }
         else:
-            return {"status": "unhealthy", "ollama": "disconnected"}
+            return {
+                "status": "unhealthy", 
+                "ollama": "disconnected",
+                "server_ip": LOCAL_IP,
+                "ollama_url": OLLAMA_URL
+            }
     except:
-        return {"status": "unhealthy", "ollama": "unreachable"}
+        return {
+            "status": "unhealthy", 
+            "ollama": "unreachable",
+            "server_ip": LOCAL_IP,
+            "ollama_url": OLLAMA_URL
+        }
+
+def execute_action(action: str, target: str) -> str:
+    """Execute actual actions and return results"""
+    try:
+        if action == "time":
+            current_time = datetime.datetime.now().strftime("%I:%M %p")
+            current_date = datetime.datetime.now().strftime("%A, %B %d, %Y")
+            return f"The current time is {current_time} on {current_date}"
+        
+        elif action == "date":
+            current_date = datetime.datetime.now().strftime("%A, %B %d, %Y")
+            return f"Today is {current_date}"
+        
+        elif action == "weather":
+            return "I'd need access to a weather service to get the current weather."
+        
+        elif action == "search":
+            return f"I would search for '{target}' but I need your phone to execute the browser opening."
+        
+        else:
+            return ""
+    except Exception as e:
+        return f"I had trouble getting that information: {str(e)}"
 
 @app.post("/query")
 def process_command(command: Command):
@@ -148,6 +213,13 @@ def process_command(command: Command):
             raise HTTPException(status_code=400, detail="Empty command text")
         
         result = query_gemma(command.text.strip())
+        
+        # Execute action if needed
+        action_result = ""
+        if result['action'] != "none":
+            action_result = execute_action(result['action'], result['target'])
+            if action_result:
+                result['reply'] = action_result
         
         return SmithResponse(
             reply=result['reply'],
@@ -169,7 +241,9 @@ def process_command(command: Command):
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting Smith Assistant Server...")
-    print("Ollama should be running on: http://localhost:11434")
-    print("API will be available at: http://localhost:8000")
+    print("Starting Groot Assistant Server...")
+    print(f"Detected Local IP: {LOCAL_IP}")
+    print(f"Ollama URL: {OLLAMA_URL}")
+    print("API will be available at: http://0.0.0.0:8000")
+    print(f"Health check: http://{LOCAL_IP}:8000/health")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

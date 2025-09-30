@@ -33,6 +33,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.*
+import androidx.lifecycle.lifecycleScope
+import com.example.groot.TaskAutomationManager
+import kotlinx.coroutines.launch
+import okhttp3.*
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
@@ -503,7 +509,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         lifecycleScope.launch {
             try {
-                // Send to FastAPI server
                 val jsonBody = JSONObject().apply {
                     put("text", command)
                     put("context", "mobile_assistant")
@@ -513,43 +518,73 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     .toRequestBody("application/json".toMediaType())
 
                 val request = Request.Builder()
-                    .url("http://10.98.214.234:8000/query")
+                    .url("http://10.0.2.2:8000/query")
                     .post(requestBody)
                     .addHeader("Content-Type", "application/json")
                     .build()
 
-                llmManager.client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val responseBody = response.body?.string() ?: ""
-                        val jsonResponse = JSONObject(responseBody)
-
-                        val reply = jsonResponse.getString("reply")
-                        val action = jsonResponse.getString("action")
-                        val target = jsonResponse.getString("target")
-                        val confidence = jsonResponse.getDouble("confidence")
-
-                        Log.i(TAG, "Server response - Reply: $reply, Action: $action, Target: $target")
-
-                        // Execute action if not "none"
-                        if (action != "none") {
-                            Log.i(TAG, "Executing action: $action with target: $target")
-                            taskAutomationManager.executeAction(action, target, confidence)
-                        }
-
-                        // Speak the response
-                        speak(reply) {
-                            isProcessing = false
-                        }
-                    } else {
-                        speak("Sorry, I couldn't process that request") {
-                            isProcessing = false
+                Log.i(TAG, "Sending request: ${requestBody}")
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(10, TimeUnit.SECONDS)
+                    .build()
+                val call = client.newCall(request)
+                call.enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        val errorMessage = e.message ?: "Unknown network error"
+                        Log.e(TAG, "Network failure: $errorMessage, Stacktrace: ${e.stackTraceToString()}")
+                        runOnUiThread {
+                            speak("I encountered a network error: $errorMessage. Check connection.") {
+                                isProcessing = false
+                            }
                         }
                     }
-                }
+
+                    override fun onResponse(call: Call, response: Response) {
+                        Log.i(TAG, "Response code: ${response.code}")
+                        if (response.isSuccessful) {
+                            val responseBody = response.body?.string() ?: ""
+                            Log.i(TAG, "Response body: $responseBody")
+                            runOnUiThread {
+                                try {
+                                    val jsonResponse = JSONObject(responseBody)
+                                    val reply = jsonResponse.optString("reply", "No reply")
+                                    val action = jsonResponse.optString("action", "none")
+                                    val target = jsonResponse.optString("target", "")
+                                    val confidence = jsonResponse.optDouble("confidence", 0.0)
+
+                                    Log.i(TAG, "Parsed - Reply: $reply, Action: $action, Target: $target")
+                                    if (action != "none") {
+                                        lifecycleScope.launch {
+                                            taskAutomationManager.executeAction(action, target, confidence)
+                                        }
+                                    }
+
+                                    speak(reply) {
+                                        isProcessing = false
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "JSON parse error: ${e.message}, Stacktrace: ${e.stackTraceToString()}")
+                                    speak("I encountered a parsing error: ${e.message}.") {
+                                        isProcessing = false
+                                    }
+                                }
+                            }
+                        } else {
+                            runOnUiThread {
+                                speak("Server error: ${response.code}") {
+                                    isProcessing = false
+                                }
+                            }
+                        }
+                    }
+                })
             } catch (e: Exception) {
-                Log.e(TAG, "Error processing command", e)
-                speak("I encountered an error: ${e.message}") {
-                    isProcessing = false
+                Log.e(TAG, "Command setup error: ${e.message}, Stacktrace: ${e.stackTraceToString()}")
+                runOnUiThread {
+                    speak("I encountered an error: ${e.message}. Check logs.") {
+                        isProcessing = false
+                    }
                 }
             }
         }
