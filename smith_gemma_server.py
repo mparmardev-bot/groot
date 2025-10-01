@@ -43,19 +43,25 @@ class SmithResponse(BaseModel):
 def query_gemma(user_input: str) -> dict:
     """Query Gemma via Ollama API with structured prompting"""
     
-    system_prompt = """You are Smith, an intelligent mobile assistant. You must respond ONLY with valid JSON.
+    system_prompt = """You are Groot, an intelligent mobile assistant. You must respond ONLY with valid JSON.
 
 Analyze the user's command and provide a JSON response with exactly these fields:
-- "reply": A friendly, concise response (maximum 20 words)
-- "action": Choose ONE from [call, sms, search, open_app, mobile_data, hotspot, wifi, bluetooth, settings, time, date, weather, none]
+- "reply": A friendly, concise response
+- "action": Choose ONE from [call, sms, search, open_app, mobile_data, hotspot, wifi, bluetooth, settings, time, date, weather, add_contact, none]
 - "target": The specific target for the action (phone number, search query, app name, contact name, etc.)
 - "emotion": Choose ONE from [happy, sad, excited, calm, confident, helpful, friendly, thoughtful, apologetic]
 - "confidence": A number between 0.0 and 1.0 indicating how confident you are about the action
 
+IMPORTANT: For call commands, extract ONLY the contact name without extra words.
+
 Examples:
-User: "Call mom" → {"reply": "Calling Mom now", "action": "call", "target": "mom", "emotion": "friendly", "confidence": 0.9}
+User: "Groot Call mom" → {"reply": "Calling your mom", "action": "call", "target": "mom", "emotion": "friendly", "confidence": 0.9}
+User: "Call Rammohan" → {"reply": "Calling Rammohan", "action": "call", "target": "rammohan", "emotion": "friendly", "confidence": 0.9}
+User: "Phone dad" → {"reply": "Calling your dad", "action": "call", "target": "dad", "emotion": "friendly", "confidence": 0.9}
+User: "Dial papa" → {"reply": "Calling your papa", "action": "call", "target": "papa", "emotion": "friendly", "confidence": 0.9}
+User: "Call my friend Ram" → {"reply": "Calling Ram", "action": "call", "target": "ram", "emotion": "friendly", "confidence": 0.9}
 User: "What time is it" → {"reply": "Let me check the time", "action": "time", "target": "", "emotion": "helpful", "confidence": 0.95}
-User: "How are you" → {"reply": "I'm doing great and ready to help!", "action": "none", "target": "", "emotion": "happy", "confidence": 0.9}
+User: "How are you" → {"reply": "I'm doing great and ready to help! What about you?", "action": "none", "target": "", "emotion": "happy", "confidence": 0.9}
 
 CRITICAL: Respond with ONLY the JSON object, no other text."""
 
@@ -66,7 +72,7 @@ CRITICAL: Respond with ONLY the JSON object, no other text."""
         response = requests.post(
             f'{OLLAMA_URL}/api/generate',
             json={
-                'model': 'gemma2:2b',  # Updated to your correct model
+                'model': 'gemma2:2b',
                 'prompt': prompt,
                 'stream': False,
                 'options': {
@@ -95,6 +101,9 @@ CRITICAL: Respond with ONLY the JSON object, no other text."""
                 
                 required_fields = ['reply', 'action', 'target', 'emotion', 'confidence']
                 if all(field in parsed_json for field in required_fields):
+                    # Clean up the target field
+                    if parsed_json['action'] == 'call':
+                        parsed_json['target'] = parsed_json['target'].lower().strip()
                     return parsed_json
                 else:
                     raise ValueError("Missing required fields")
