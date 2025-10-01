@@ -131,6 +131,7 @@ class TaskAutomationManager(private val context: Context) {
         return when (name.lowercase()) {
             "mom", "mother" -> "+918827613672" // Replace with actual numbers
             "dad", "father" -> "+919584613672"
+            "Rammohan", "friend" -> "+917879648737"
             else -> name
         }
     }

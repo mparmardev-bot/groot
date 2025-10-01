@@ -2,21 +2,36 @@ package com.example.groot
 
 import android.app.Service
 import android.content.Intent
+import android.os.Binder
 import android.os.IBinder
 import android.util.Log
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 class GrootService : Service() {
+
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var llmManager: LLMManager
+    private lateinit var taskManager: TaskAutomationManager
 
     companion object {
         private const val TAG = "GrootService"
     }
 
+    inner class LocalBinder : Binder() {
+        fun getService(): GrootService = this@GrootService
+    }
+
+    private val binder = LocalBinder()
+
     override fun onCreate() {
         super.onCreate()
         llmManager = LLMManager()
+        taskManager = TaskAutomationManager(this)
         Log.d(TAG, "GrootService created")
     }
 
@@ -25,9 +40,7 @@ class GrootService : Service() {
         return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
+    override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
         serviceScope.cancel()
@@ -35,14 +48,30 @@ class GrootService : Service() {
         super.onDestroy()
     }
 
-    fun processCommand(command: String, callback: (String) -> Unit) {
+    fun processCommand(command: String, callback: (String, String, String) -> Unit) {
         serviceScope.launch {
             try {
                 val response = llmManager.generateResponse(command)
-                callback(response)
+                val json = JSONObject(response)
+                val reply = json.optString("reply", "")
+                val action = json.optString("action", "none")
+                val target = json.optString("target", "")
+
+                // Execute action if AI returned a recognized command
+                if (action != "none") {
+                    taskManager.executeAction(action, target, confidence = 1.0)
+                }
+
+                callback(reply, action, target)
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing command: ${e.message}")
-                callback("I'm sorry, I encountered an error processing your request.")
+                val isHindi = command.matches(Regex(".*[\\u0900-\\u097F].*"))
+                val errorMsg = if (isHindi) {
+                    "मुझे खेद है, मुझे आपके अनुरोध को संसाधित करने में त्रुटि हुई।"
+                } else {
+                    "I'm sorry, I encountered an error processing your request."
+                }
+                callback(errorMsg, "none", "")
             }
         }
     }

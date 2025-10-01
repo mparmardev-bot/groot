@@ -1,11 +1,9 @@
 package com.example.groot
 
 import android.Manifest
-import android.content.Intent
+import android.content.*
 import android.content.pm.PackageManager
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.os.*
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.RecognitionListener
@@ -15,32 +13,52 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
 import com.example.groot.ui.theme.GrootTheme
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Request
-import org.json.JSONObject
+import kotlinx.coroutines.delay
 import java.util.*
-import androidx.lifecycle.lifecycleScope
-import com.example.groot.TaskAutomationManager
-import kotlinx.coroutines.launch
-import okhttp3.*
-import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
+
+    private var grootService: GrootService? = null
+    private var isBound = false
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            grootService = (binder as GrootService.LocalBinder).getService()
+            isBound = true
+            Log.d(TAG, "GrootService bound successfully")
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            grootService = null
+            isBound = false
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Intent(this, GrootService::class.java).also { intent ->
+            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (isBound) {
+            unbindService(serviceConnection)
+            isBound = false
+        }
+    }
 
     companion object {
         private const val TAG = "MainActivity"
@@ -48,12 +66,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         private val REQUIRED_PERMISSIONS = arrayOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.INTERNET,
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.SEND_SMS,
-            Manifest.permission.ACCESS_WIFI_STATE,
-            Manifest.permission.CHANGE_WIFI_STATE,
-            Manifest.permission.ACCESS_NETWORK_STATE,
-            Manifest.permission.CHANGE_NETWORK_STATE
+            Manifest.permission.CALL_PHONE
         )
     }
 
@@ -62,9 +75,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
 
     // Core managers
-    private lateinit var llmManager: LLMManager
     private lateinit var memoryManager: MemoryManager
-    private lateinit var taskAutomationManager: TaskAutomationManager
 
     // Handler for delayed operations
     private val handler = Handler(Looper.getMainLooper())
@@ -72,16 +83,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     // State
     private var isListening = false
     private var isProcessing = false
-    private var isListeningContinuously = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        initializeManagers()
+        memoryManager = MemoryManager()
         requestPermissions()
         initializeVoiceComponents()
 
-        // Set up Compose UI
         setContent {
             GrootTheme {
                 Surface(
@@ -92,27 +101,37 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 }
             }
         }
-
-        // Start the main service
-        startService(Intent(this, GrootService::class.java))
     }
 
     @Composable
     private fun GrootUI() {
-        var messages by remember { mutableStateOf(listOf<String>()) }
+        var refreshTrigger by remember { mutableStateOf(0) }
         var isConnected by remember { mutableStateOf(false) }
-        var connectionStatus by remember { mutableStateOf("Testing connection...") }
-        var lastCommand by remember { mutableStateOf("") }
-        var isContinuousMode by remember { mutableStateOf(false) }
+        var isCurrentlyListening by remember { mutableStateOf(false) }
+        var isCurrentlyProcessing by remember { mutableStateOf(false) }
 
+        // Update state periodically
         LaunchedEffect(Unit) {
-            // Test connection on startup
-            connectionStatus = "Connecting to Ollama..."
-            isConnected = llmManager.testConnection()
-            connectionStatus = if (isConnected) {
-                "Connected to Ollama (gemma3:1b)"
-            } else {
-                "Failed to connect - Check Ollama"
+            while (true) {
+                refreshTrigger++
+                isConnected = grootService != null && isBound
+                isCurrentlyListening = isListening
+                isCurrentlyProcessing = isProcessing
+                delay(500)
+            }
+        }
+
+        // Get messages using the method that exists in MemoryManager
+        val messages = remember(refreshTrigger) {
+            memoryManager.getRecentConversations(50)
+        }
+
+        val listState = rememberLazyListState()
+
+        // Auto-scroll to bottom when new messages arrive
+        LaunchedEffect(messages.size) {
+            if (messages.isNotEmpty()) {
+                listState.animateScrollToItem(messages.size - 1)
             }
         }
 
@@ -120,243 +139,110 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Header
             Text(
                 text = "Groot AI Assistant",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Connection Status Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isConnected)
-                        Color.Green.copy(alpha = 0.1f)
-                    else
-                        Color.Red.copy(alpha = 0.1f)
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = if (isConnected) "🟢" else "🔴",
-                        style = MaterialTheme.typography.headlineSmall
-                    )
-                    Text(
-                        text = connectionStatus,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isConnected)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Main Voice Button
-            Button(
-                onClick = { startListeningForCommand() },
-                enabled = !isListening && !isProcessing && isConnected && !isContinuousMode,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(60.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = when {
-                        isListening -> Color.Red
-                        isProcessing -> Color(0xFFFFA500) // Orange
-                        else -> MaterialTheme.colorScheme.primary
-                    }
-                )
-            ) {
-                Text(
-                    text = when {
-                        isListening -> "🎤 Listening..."
-                        isProcessing -> "⏳ Processing..."
-                        !isConnected -> "❌ Not Connected"
-                        isContinuousMode -> "🎧 Continuous Mode Active"
-                        else -> "🗣️ Tap to Speak"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Continuous Listening Toggle Button
-            Button(
-                onClick = {
-                    isContinuousMode = !isContinuousMode
-                    if (isContinuousMode) {
-                        startContinuousListening()
-                    } else {
-                        stopContinuousListening()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = isConnected,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isContinuousMode) Color.Green else MaterialTheme.colorScheme.secondary
-                )
-            ) {
-                Text(if (isContinuousMode) "🔊 Stop Continuous Mode" else "🎧 Enable Continuous Mode")
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Control Buttons Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Button(
-                    onClick = {
-                        lifecycleScope.launch {
-                            connectionStatus = "Testing..."
-                            isConnected = llmManager.testConnection()
-                            connectionStatus = if (isConnected) {
-                                "Connected to Ollama (gemma3:1b)"
-                            } else {
-                                "Connection failed"
-                            }
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("🔄 Test")
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Button(
-                    onClick = {
-                        memoryManager.clearMemory()
-                        speak("Memory cleared")
-                        messages = emptyList()
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("🗑️ Clear")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Quick Test Buttons
-            Text(
-                text = "Quick Tests:",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Medium
+                style = MaterialTheme.typography.headlineMedium
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+            // Connection Status
+            Text(
+                text = if (isConnected) "Connected to AI" else "Connecting...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Scrollable conversation area
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                state = listState,
+                contentPadding = PaddingValues(8.dp)
             ) {
-                Button(
-                    onClick = {
-                        testVoiceCommand("hello, introduce yourself")
-                        lastCommand = "hello, introduce yourself"
-                    },
-                    enabled = !isProcessing && isConnected,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("👋 Hello")
-                }
-
-                Spacer(modifier = Modifier.width(4.dp))
-
-                Button(
-                    onClick = {
-                        testVoiceCommand("call mom")
-                        lastCommand = "call mom"
-                    },
-                    enabled = !isProcessing && isConnected,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("📞 Call")
-                }
-
-                Spacer(modifier = Modifier.width(4.dp))
-
-                Button(
-                    onClick = {
-                        testVoiceCommand("open chrome")
-                        lastCommand = "open chrome"
-                    },
-                    enabled = !isProcessing && isConnected,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("🌐 Chrome")
-                }
-            }
-
-            // Last Command Display
-            if (lastCommand.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+                if (messages.isEmpty()) {
+                    item {
                         Text(
-                            text = "Last Command:",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold
+                            text = "No conversations yet. Tap 'Speak' to start!",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(16.dp)
                         )
-                        Text(
-                            text = lastCommand,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                    }
+                } else {
+                    items(messages) { entry ->
+                        MessageCard(entry = entry)
                     }
                 }
             }
 
-            // Messages Display
-            if (messages.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Recent Activity:",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        messages.takeLast(3).forEach { message ->
-                            Text(
-                                text = "• $message",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(vertical = 2.dp)
-                            )
-                        }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Speak Button
+            Button(
+                onClick = { startListeningForCommand() },
+                enabled = !isCurrentlyListening && !isCurrentlyProcessing,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    when {
+                        isCurrentlyListening -> "🎤 Listening..."
+                        isCurrentlyProcessing -> "⚙️ Processing..."
+                        else -> "🎤 Tap to Speak"
                     }
-                }
+                )
             }
         }
     }
 
-    private fun initializeManagers() {
-        llmManager = LLMManager()
-        memoryManager = MemoryManager()
-        taskAutomationManager = TaskAutomationManager(this)
+    @Composable
+    private fun MessageCard(entry: MemoryManager.ConversationEntry) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = when (entry.type) {
+                    MemoryManager.ConversationType.USER_INPUT ->
+                        MaterialTheme.colorScheme.primaryContainer
+                    MemoryManager.ConversationType.ASSISTANT_RESPONSE ->
+                        MaterialTheme.colorScheme.secondaryContainer
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                }
+            )
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = when (entry.type) {
+                        MemoryManager.ConversationType.USER_INPUT -> "You"
+                        MemoryManager.ConversationType.ASSISTANT_RESPONSE -> "Groot"
+                        else -> "System"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = entry.message
+                        .removePrefix("User: ")
+                        .removePrefix("Assistant: ")
+                        .removePrefix("System: "),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = entry.timestamp,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 
     private fun requestPermissions() {
@@ -386,28 +272,35 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 }
 
                 override fun onBeginningOfSpeech() {
-                    Log.d(TAG, "Speech started")
                     isListening = true
+                    Log.d(TAG, "Beginning of speech")
                 }
 
                 override fun onRmsChanged(rmsdB: Float) {}
+
                 override fun onBufferReceived(buffer: ByteArray?) {}
 
                 override fun onEndOfSpeech() {
-                    Log.d(TAG, "Speech ended")
                     isListening = false
+                    Log.d(TAG, "End of speech")
                 }
 
                 override fun onError(error: Int) {
-                    Log.e(TAG, "Speech recognition error: $error")
                     isListening = false
-
-                    // Restart continuous listening after error
-                    if (isListeningContinuously && !isProcessing) {
-                        handler.postDelayed({
-                            startVoiceActivatedListening()
-                        }, 2000)
-                    } else if (!isProcessing) {
+                    val errorMessage = when (error) {
+                        SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
+                        SpeechRecognizer.ERROR_CLIENT -> "Client error"
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Insufficient permissions"
+                        SpeechRecognizer.ERROR_NETWORK -> "Network error"
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
+                        SpeechRecognizer.ERROR_NO_MATCH -> "No match found"
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
+                        SpeechRecognizer.ERROR_SERVER -> "Server error"
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Speech timeout"
+                        else -> "Unknown error: $error"
+                    }
+                    Log.e(TAG, "Speech recognition error: $errorMessage")
+                    if (!isProcessing && error != SpeechRecognizer.ERROR_NO_MATCH) {
                         restartListening()
                     }
                 }
@@ -415,277 +308,102 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 override fun onResults(results: Bundle?) {
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     matches?.firstOrNull()?.let { command ->
+                        Log.d(TAG, "Recognized: $command")
                         processVoiceCommand(command)
-                    }
-
-                    // Restart listening if in continuous mode
-                    if (isListeningContinuously && !isProcessing) {
-                        handler.postDelayed({
-                            startVoiceActivatedListening()
-                        }, 1000)
                     }
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {}
+
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
         }
     }
 
     private fun initializeTextToSpeech() {
-        tts = TextToSpeech(this, this, "com.samsung.SMT").apply {
-            setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    Log.d(TAG, "TTS started")
-                }
-
-                override fun onDone(utteranceId: String?) {
-                    Log.d(TAG, "TTS completed")
-                    // Restart listening if in continuous mode
-                    runOnUiThread {
-                        if (!isProcessing && isListeningContinuously) {
-                            handler.postDelayed({
-                                startVoiceActivatedListening()
-                            }, 1000)
-                        }
-                    }
-                }
-
-                override fun onError(utteranceId: String?) {
-                    Log.e(TAG, "TTS error")
-                }
-            })
-        }
+        tts = TextToSpeech(this, this)
     }
 
     private fun startListeningForCommand() {
-        if (isListening || isProcessing) return
+        if (isListening || isProcessing) {
+            Log.w(TAG, "Already listening or processing")
+            return
+        }
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            // Support both Hindi and English
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN,en-US")
             putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         }
 
-        speechRecognizer?.startListening(intent)
-    }
-
-    private fun startContinuousListening() {
-        isListeningContinuously = true
-        startVoiceActivatedListening()
-        speak("Continuous listening activated. I'm always listening now.")
-    }
-
-    private fun stopContinuousListening() {
-        isListeningContinuously = false
-        speechRecognizer?.stopListening()
-        speak("Continuous listening disabled.")
-    }
-
-    private fun startVoiceActivatedListening() {
-        if (!isListeningContinuously || isProcessing) return
-
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
+        try {
+            speechRecognizer?.startListening(intent)
+            Log.d(TAG, "Started listening for command")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start listening", e)
+            isListening = false
         }
-
-        speechRecognizer?.startListening(intent)
     }
 
     private fun processVoiceCommand(command: String) {
-        if (isProcessing) return
+        if (isProcessing) {
+            Log.w(TAG, "Already processing a command")
+            return
+        }
 
         isProcessing = true
         Log.i(TAG, "Processing command: $command")
+        memoryManager.addConversation("User: $command")
 
-        lifecycleScope.launch {
-            try {
-                val jsonBody = JSONObject().apply {
-                    put("text", command)
-                    put("context", "mobile_assistant")
-                }
-
-                val requestBody = jsonBody.toString()
-                    .toRequestBody("application/json".toMediaType())
-
-                val request = Request.Builder()
-                    .url("http://10.0.2.2:8000/query")
-                    .post(requestBody)
-                    .addHeader("Content-Type", "application/json")
-                    .build()
-
-                Log.i(TAG, "Sending request: ${requestBody}")
-                val client = OkHttpClient.Builder()
-                    .connectTimeout(10, TimeUnit.SECONDS)
-                    .readTimeout(10, TimeUnit.SECONDS)
-                    .build()
-                val call = client.newCall(request)
-                call.enqueue(object : Callback {
-                    override fun onFailure(call: Call, e: IOException) {
-                        val errorMessage = e.message ?: "Unknown network error"
-                        Log.e(TAG, "Network failure: $errorMessage, Stacktrace: ${e.stackTraceToString()}")
-                        runOnUiThread {
-                            speak("I encountered a network error: $errorMessage. Check connection.") {
-                                isProcessing = false
-                            }
-                        }
-                    }
-
-                    override fun onResponse(call: Call, response: Response) {
-                        Log.i(TAG, "Response code: ${response.code}")
-                        if (response.isSuccessful) {
-                            val responseBody = response.body?.string() ?: ""
-                            Log.i(TAG, "Response body: $responseBody")
-                            runOnUiThread {
-                                try {
-                                    val jsonResponse = JSONObject(responseBody)
-                                    val reply = jsonResponse.optString("reply", "No reply")
-                                    val action = jsonResponse.optString("action", "none")
-                                    val target = jsonResponse.optString("target", "")
-                                    val confidence = jsonResponse.optDouble("confidence", 0.0)
-
-                                    Log.i(TAG, "Parsed - Reply: $reply, Action: $action, Target: $target")
-                                    if (action != "none") {
-                                        lifecycleScope.launch {
-                                            taskAutomationManager.executeAction(action, target, confidence)
-                                        }
-                                    }
-
-                                    speak(reply) {
-                                        isProcessing = false
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "JSON parse error: ${e.message}, Stacktrace: ${e.stackTraceToString()}")
-                                    speak("I encountered a parsing error: ${e.message}.") {
-                                        isProcessing = false
-                                    }
-                                }
-                            }
-                        } else {
-                            runOnUiThread {
-                                speak("Server error: ${response.code}") {
-                                    isProcessing = false
-                                }
-                            }
-                        }
-                    }
-                })
-            } catch (e: Exception) {
-                Log.e(TAG, "Command setup error: ${e.message}, Stacktrace: ${e.stackTraceToString()}")
-                runOnUiThread {
-                    speak("I encountered an error: ${e.message}. Check logs.") {
-                        isProcessing = false
-                    }
-                }
+        // Use GrootService to process the command
+        grootService?.processCommand(command) { reply, action, target ->
+            Log.i(TAG, "GrootService Response: $reply | Action: $action | Target: $target")
+            memoryManager.addConversation("Assistant: $reply")
+            speak(reply) {
+                isProcessing = false
+                Log.d(TAG, "Finished processing command")
+            }
+        } ?: run {
+            Log.w(TAG, "GrootService not bound yet")
+            val msg = "Service is not ready, please try again."
+            memoryManager.addConversation("System: $msg")
+            speak(msg) {
+                isProcessing = false
             }
         }
-    }
-
-    private fun buildSmartPrompt(command: String): String {
-        return """
-        You are Groot, a helpful AI assistant. Analyze this command: "$command"
-        
-        If it's an action request (call, open app, toggle wifi/data, etc.), respond briefly and helpfully.
-        If it's a question or conversation, respond naturally as Groot would.
-        
-        Command: $command
-        """.trimIndent()
-    }
-
-    data class ActionData(
-        val action: String = "",
-        val target: String = "",
-        val confidence: Double = 0.0,
-        val confirmation: String = ""
-    )
-
-    private fun parseActionFromResponse(command: String, response: String): ActionData {
-        val lowerCommand = command.lowercase()
-
-        return when {
-            lowerCommand.contains("call") -> {
-                val target = extractTarget(lowerCommand, listOf("mom", "dad", "mother", "father"))
-                ActionData("call", target, 0.9, "Calling")
-            }
-            lowerCommand.contains("open") -> {
-                val target = extractTarget(lowerCommand, listOf("chrome", "youtube", "whatsapp", "gmail"))
-                ActionData("open_app", target, 0.9, "Opening")
-            }
-            lowerCommand.contains("wifi") -> {
-                val target = if (lowerCommand.contains("on") || lowerCommand.contains("enable")) "on" else "off"
-                ActionData("wifi", target, 0.8, "Toggling WiFi")
-            }
-            lowerCommand.contains("data") -> {
-                val target = if (lowerCommand.contains("on") || lowerCommand.contains("enable")) "on" else "off"
-                ActionData("mobile_data", target, 0.8, "Toggling mobile data")
-            }
-            lowerCommand.contains("hotspot") -> {
-                val target = if (lowerCommand.contains("on") || lowerCommand.contains("enable")) "on" else "off"
-                ActionData("hotspot", target, 0.8, "Toggling hotspot")
-            }
-            lowerCommand.contains("settings") -> {
-                ActionData("settings", "", 0.9, "Opening settings")
-            }
-            lowerCommand.contains("search") -> {
-                val query = command.substringAfter("search", "").trim()
-                ActionData("search", query, 0.8, "Searching for")
-            }
-            else -> ActionData() // No action, just conversation
-        }
-    }
-
-    private fun extractTarget(command: String, possibleTargets: List<String>): String {
-        return possibleTargets.find { command.contains(it) } ?: ""
-    }
-
-    private fun handleLLMResponse(response: String) {
-        Log.i(TAG, "LLM Response: $response")
-        speak(response) {
-            isProcessing = false
-        }
-    }
-
-    private fun testVoiceCommand(command: String) {
-        Log.i(TAG, "Testing command: $command")
-        processVoiceCommand(command)
     }
 
     private fun speak(text: String, onComplete: (() -> Unit)? = null) {
         tts?.let { textToSpeech ->
-            // Detect language from text content and switch TTS language accordingly
-            val locale = when {
-                text.matches(Regex(".*[\\u0900-\\u097F].*")) -> Locale("hi", "IN") // Hindi Devanagari script
-                else -> Locale.US // English
+            val locale = if (text.matches(Regex(".*[\\u0900-\\u097F].*"))) {
+                Locale("hi", "IN")
+            } else {
+                Locale.US
             }
-
-            // Set the detected language
-            val result = textToSpeech.setLanguage(locale)
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Log.w(TAG, "Language ${locale.language} not supported, using default")
-            }
+            textToSpeech.language = locale
 
             val utteranceId = UUID.randomUUID().toString()
 
             if (onComplete != null) {
                 textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(id: String?) {}
+                    override fun onStart(id: String?) {
+                        Log.d(TAG, "TTS started: $id")
+                    }
+
                     override fun onDone(id: String?) {
                         if (id == utteranceId) {
-                            onComplete()
+                            Log.d(TAG, "TTS completed: $id")
+                            handler.post { onComplete() }
                         }
                     }
+
                     override fun onError(id: String?) {
                         if (id == utteranceId) {
-                            onComplete()
+                            Log.e(TAG, "TTS error: $id")
+                            handler.post { onComplete() }
                         }
                     }
                 })
@@ -695,110 +413,54 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
             }
 
-            textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+            try {
+                textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+                Log.d(TAG, "Speaking: $text")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to speak", e)
+                onComplete?.invoke()
+            }
+        } ?: run {
+            Log.w(TAG, "TTS not initialized")
+            onComplete?.invoke()
         }
     }
 
     private fun restartListening() {
-        if (isProcessing) return
         handler.postDelayed({
             if (!isProcessing && !isListening) {
-                Log.d(TAG, "Restarting listening")
+                Log.d(TAG, "Auto-restarting listening")
             }
         }, 1000)
-    }
-
-    private fun testLLMConnection() {
-        lifecycleScope.launch {
-            try {
-                val isConnected = llmManager.testConnection()
-                val message = if (isConnected) {
-                    "Connection successful! Testing AI response..."
-                } else {
-                    "Connection failed. Make sure Ollama is running."
-                }
-
-                speak(message)
-
-                if (isConnected) {
-                    val response = llmManager.generateResponse("Hello, please introduce yourself as Groot.")
-                    speak(response)
-                }
-            } catch (e: Exception) {
-                speak("Connection test failed: ${e.message}")
-                Log.e(TAG, "Connection test error", e)
-            }
-        }
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts?.let { textToSpeech ->
-
-                // 1️⃣ Try to set Hindi first
-                var result = textToSpeech.setLanguage(Locale("hi", "IN"))
-                var useHindi = true
-
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    Log.w(TAG, "⚠️ Hindi not available, falling back to English (US)")
-                    result = textToSpeech.setLanguage(Locale.US)
-                    useHindi = false
+                val hindiResult = textToSpeech.setLanguage(Locale("hi", "IN"))
+                if (hindiResult == TextToSpeech.LANG_MISSING_DATA ||
+                    hindiResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    Log.w(TAG, "Hindi language not supported, falling back to English")
+                    textToSpeech.setLanguage(Locale.US)
                 }
 
-                // 2️⃣ Log all available voices for debugging
-                textToSpeech.voices?.forEach { voice ->
-                    Log.d(TAG, """
-                    Voice Name: ${voice.name}
-                    Locale: ${voice.locale}
-                    Quality: ${voice.quality}
-                    Requires Network: ${voice.isNetworkConnectionRequired}
-                    Features: ${voice.features}
-                """.trimIndent())
-                }
+                textToSpeech.setPitch(0.9f)
+                textToSpeech.setSpeechRate(0.9f)
 
-                // 3️⃣ Try to find a male voice for the current language
-                val currentLang = textToSpeech.language.language
-                val maleVoice = textToSpeech.voices?.find { voice ->
-                    voice.locale.language == currentLang &&
-                            voice.features.contains("male")
-                }
-
-                if (maleVoice != null) {
-                    textToSpeech.voice = maleVoice
-                    Log.d(TAG, "✅ Male voice set: ${maleVoice.name}")
-                } else {
-                    Log.w(TAG, "⚠️ No male voice found, applying pitch fallback")
-                    textToSpeech.setPitch(0.85f) // Lower pitch for masculine sound
-                }
-
-                // 4️⃣ Set speech rate for natural tone
-                textToSpeech.setSpeechRate(0.95f)
-
-                // 5️⃣ Speak sample line
-                if (result == TextToSpeech.SUCCESS) {
-                    if (useHindi) {
-                        speak("मैं ग्रूट हूं, आपका AI सहायक। आपकी मदद के लिए तैयार हूं।")
-                    } else {
-                        speak("I am Groot, your AI assistant. Ready to help you.")
-                    }
-                }
+                Log.d(TAG, "TTS initialized successfully")
+                speak("Hello sir...... मैं ग्रूट हूं, आपका AI Assistant। आपकी मदद के लिए पूरी tarah तैयार हूं ।" +
+                        "sir.... क्या आप मुझे बता सकते हैं मैं आपके लिए क्या कर सकता हूं... या किस प्रकार आपकी help कर सकता हूं ।")
             }
         } else {
-            Log.e(TAG, "❌ TTS initialization failed")
+            Log.e(TAG, "TTS initialization failed with status: $status")
         }
     }
 
-
-
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            isListeningContinuously = false
-            speechRecognizer?.destroy()
-            tts?.shutdown()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in cleanup", e)
-        }
+        speechRecognizer?.destroy()
+        tts?.shutdown()
+        Log.d(TAG, "MainActivity destroyed")
     }
 
     override fun onRequestPermissionsResult(
@@ -807,12 +469,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-
         if (requestCode == PERMISSIONS_REQUEST_CODE) {
             val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
             if (allGranted) {
-                Log.i(TAG, "All permissions granted")
-                initializeVoiceComponents()
+                Log.d(TAG, "All permissions granted")
+                speak("All permissions granted. I'm ready to help!")
             } else {
                 Log.w(TAG, "Some permissions denied")
                 speak("I need all permissions to work properly")

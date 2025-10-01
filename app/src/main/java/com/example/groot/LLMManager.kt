@@ -9,34 +9,28 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class LLMManager {
-    val client = OkHttpClient()
-    private val baseUrl = "http://192.168.88.39:8000" // For Android emulator
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val baseUrl = "http://192.168.88.39:8000"  // Update with your IP
     private val memoryManager = MemoryManager()
 
     companion object {
         private const val TAG = "LLMManager"
     }
 
-    data class LLMRequest(
-        val model: String,
-        val prompt: String,
-        val stream: Boolean = false
-    )
-
     suspend fun generateResponse(prompt: String): String = withContext(Dispatchers.IO) {
         try {
             memoryManager.addConversation("User: $prompt")
-            val context = memoryManager.getRecentContext(3)
-            val contextPrompt = if (context.isNotEmpty()) {
-                context.joinToString("\n") + "\nUser: $prompt"
-            } else {
-                prompt
-            }
 
             val jsonBody = JSONObject().apply {
-                put("text", contextPrompt)  // Matches Command.text in FastAPI
+                put("text", prompt)
                 put("context", "mobile_assistant")
             }
 
@@ -44,33 +38,56 @@ class LLMManager {
                 .toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()
-                .url("${baseUrl}/query")  // Changed to FastAPI endpoint
+                .url("$baseUrl/query")
                 .post(requestBody)
+                .addHeader("Content-Type", "application/json")
                 .build()
 
-            Log.d(TAG, "Sending request to FastAPI: $contextPrompt")
+            Log.d(TAG, "Sending request: $prompt")
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    throw IOException("Unexpected code ${response.code}")
+                    Log.e(TAG, "HTTP error: ${response.code}")
+                    throw IOException("Server error: ${response.code}")
                 }
 
                 val responseBody = response.body?.string() ?: ""
                 Log.d(TAG, "Raw response: $responseBody")
 
+                if (responseBody.isEmpty()) {
+                    throw IOException("Empty response")
+                }
+
                 val jsonResponse = JSONObject(responseBody)
-                val reply = jsonResponse.getString("reply")  // Match SmithResponse
+                val reply = jsonResponse.optString("reply", "")
+                val action = jsonResponse.optString("action", "none")
+                val target = jsonResponse.optString("target", "")
+
+                if (reply.isEmpty()) {
+                    throw IOException("No reply in response")
+                }
+
                 memoryManager.addConversation("Assistant: $reply")
-                return@withContext reply
+                Log.d(TAG, "Generated response: $reply (action=$action, target=$target)")
+
+                // Return full JSON string (not just reply)
+                return@withContext JSONObject()
+                    .put("reply", reply)
+                    .put("action", action)
+                    .put("target", target)
+                    .toString()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error generating response", e)
-            return@withContext "I'm sorry, I'm having trouble connecting to my AI service. Please make sure Ollama is running and try again."
+            // Return bilingual error message
+            val isHindi = prompt.matches(Regex(".*[\\u0900-\\u097F].*"))
+            return@withContext if (isHindi) {
+                "मुझे खेद है sir ,,,, मुझे अपनी AI.... सर्वर.... और,,, डेटाबेस... से जुड़ने में समस्या हो रही है।... क्या आप एक बार चेक कर सकते हैं कि " +
+                 "मैं सर्वर से कनेक्ट हूँ या नहीं? क्योंकि सर्वर से कनेक्ट हुए बिना मैं आपकी मदद नहीं कर पाऊँगा, सर । i am really very sorry sir"
+            } else {
+                "I'm sorry, I'm having trouble connecting to my AI service."
+            }
         }
-    }
-
-    fun clearMemory() {
-        memoryManager.clearMemory()
     }
 
     suspend fun testConnection(): Boolean = withContext(Dispatchers.IO) {
@@ -81,13 +98,53 @@ class LLMManager {
                 .addHeader("Accept", "application/json")
                 .build()
 
+            Log.d(TAG, "Testing connection to: $baseUrl/health")
+
             client.newCall(request).execute().use { response ->
-                Log.d(TAG, "Connection test: ${response.code} - ${response.body?.string()}")
-                return@withContext response.isSuccessful
+                val isSuccessful = response.isSuccessful
+                val responseBody = response.body?.string() ?: ""
+
+                Log.d(TAG, "Connection test: ${response.code} - $responseBody")
+
+                if (isSuccessful && responseBody.contains("healthy")) {
+                    Log.d(TAG, "Connection successful")
+                    return@withContext true
+                } else {
+                    Log.e(TAG, "Connection failed")
+                    return@withContext false
+                }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Connection test failed: ${e.message}", e)
+            Log.e(TAG, "Connection test failed", e)
             return@withContext false
+        }
+    }
+
+    fun clearMemory() {
+        memoryManager.clearMemory()
+        Log.d(TAG, "Memory cleared")
+    }
+
+    suspend fun getConnectionInfo(): String = withContext(Dispatchers.IO) {
+        return@withContext try {
+            val request = Request.Builder()
+                .url("$baseUrl/health")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val json = JSONObject(responseBody)
+                    val status = json.optString("status", "unknown")
+                    val ollama = json.optString("ollama", "unknown")
+                    "Server: $status, Ollama: $ollama"
+                } else {
+                    "Connection failed: ${response.code}"
+                }
+            }
+        } catch (e: Exception) {
+            "Connection error: ${e.message}"
         }
     }
 }
