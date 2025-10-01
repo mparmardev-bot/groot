@@ -67,7 +67,8 @@ class GrootService : Service() {
                 Log.e(TAG, "Error processing command: ${e.message}")
                 val isHindi = command.matches(Regex(".*[\\u0900-\\u097F].*"))
                 val errorMsg = if (isHindi) {
-                    "मुझे खेद है, मुझे आपके अनुरोध को संसाधित करने में त्रुटि हुई।"
+                    "मुझे खेद है sir.., मुझे आपके अनुरोध को संसाधित करने में त्रुटि हुई।"+ "मुझे अपनी AI... सर्वर... और,,, डेटाबेस... से जुड़ने में समस्या हो रही है।... क्या आप एक बार चेक कर सकते हैं कि " +
+                 "मैं सर्वर से कनेक्ट हूँ या नहीं? क्योंकि सर्वर से कनेक्ट हुए बिना मैं आपकी मदद नहीं कर पाऊँगा, सर । i am really very sorry sir"
                 } else {
                     "I'm sorry, I encountered an error processing your request."
                 }
