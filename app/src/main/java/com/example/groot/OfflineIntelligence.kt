@@ -73,7 +73,7 @@ class OfflineIntelligence {
                     lowerCommand.contains("नमस्ते") ||
                     lowerCommand.contains("namaste") -> {
                 return OfflineResponse(
-                    reply = if (isHindi) "नमस्ते! मैं ग्रूट, आपका AI सहायक हूँ। मैं आपकी कैसे मदद कर सकता हूँ?"
+                    reply = if (isHindi) "नमस्ते! मैं ग्रूट, आपका A.I सहायक हूँ। मैं आपकी कैसे मदद कर सकता हूँ?"
                     else "Hello! I'm Groot, your AI assistant. How may I help you?",
                     action = "none",
                     target = "",
