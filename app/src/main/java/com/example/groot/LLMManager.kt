@@ -1,5 +1,6 @@
 package com.example.groot
 
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,15 +12,15 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class LLMManager {
+class LLMManager(private val context: Context) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private val baseUrl = "http://192.168.88.39:8000"  // Update with your IP
-    private val memoryManager = MemoryManager()
+    private val baseUrl = "http://192.168.88.39:8000"
+    private val memoryManager = MemoryManager(context)  // Pass context here
 
     companion object {
         private const val TAG = "LLMManager"
@@ -29,9 +30,12 @@ class LLMManager {
         try {
             memoryManager.addConversation("User: $prompt")
 
+            val recentContext = memoryManager.getRecentContext(5)
+            val contextString = recentContext.joinToString("\n")
+
             val jsonBody = JSONObject().apply {
                 put("text", prompt)
-                put("context", "mobile_assistant")
+                put("context", contextString)  // Send conversation history
             }
 
             val requestBody = jsonBody.toString()
@@ -70,7 +74,6 @@ class LLMManager {
                 memoryManager.addConversation("Assistant: $reply")
                 Log.d(TAG, "Generated response: $reply (action=$action, target=$target)")
 
-                // Return full JSON string (not just reply)
                 return@withContext JSONObject()
                     .put("reply", reply)
                     .put("action", action)
@@ -79,13 +82,19 @@ class LLMManager {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error generating response", e)
-            // Return bilingual error message
             val isHindi = prompt.matches(Regex(".*[\\u0900-\\u097F].*"))
             return@withContext if (isHindi) {
-                "मुझे खेद है sir ,,,, मुझे अपनी AI.... सर्वर.... और,,, डेटाबेस... से जुड़ने में समस्या हो रही है।... क्या आप एक बार चेक कर सकते हैं कि " +
-                 "मैं सर्वर से कनेक्ट हूँ या नहीं? क्योंकि सर्वर से कनेक्ट हुए बिना मैं आपकी मदद नहीं कर पाऊँगा, सर । i am really very sorry sir"
+                JSONObject()
+                    .put("reply", "मुझे खेद है sir, मुझे अपनी AI सर्वर से जुड़ने में समस्या हो रही है।")
+                    .put("action", "none")
+                    .put("target", "")
+                    .toString()
             } else {
-                "I'm sorry, I'm having trouble connecting to my AI service."
+                JSONObject()
+                    .put("reply", "I'm sorry, I'm having trouble connecting to my AI service.")
+                    .put("action", "none")
+                    .put("target", "")
+                    .toString()
             }
         }
     }
@@ -123,6 +132,10 @@ class LLMManager {
     fun clearMemory() {
         memoryManager.clearMemory()
         Log.d(TAG, "Memory cleared")
+    }
+
+    fun getMemoryManager(): MemoryManager {
+        return memoryManager
     }
 
     suspend fun getConnectionInfo(): String = withContext(Dispatchers.IO) {

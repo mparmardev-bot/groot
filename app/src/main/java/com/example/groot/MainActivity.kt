@@ -63,10 +63,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     companion object {
         private const val TAG = "MainActivity"
         private const val PERMISSIONS_REQUEST_CODE = 1001
+        private const val WRITE_SETTINGS_REQUEST_CODE = 1002
         private val REQUIRED_PERMISSIONS = arrayOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.INTERNET,
-            Manifest.permission.CALL_PHONE
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.ACCESS_WIFI_STATE,
+            Manifest.permission.CHANGE_WIFI_STATE,
+            Manifest.permission.CHANGE_NETWORK_STATE
         )
     }
 
@@ -87,7 +93,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        memoryManager = MemoryManager()
+        memoryManager = MemoryManager(this) // Pass context
         requestPermissions()
         initializeVoiceComponents()
 
@@ -150,11 +156,23 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             Spacer(modifier = Modifier.height(8.dp))
 
             // Connection Status
-            Text(
-                text = if (isConnected) "Connected to AI" else "Connecting...",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isConnected) "🟢 Online Mode" else "🟡 Offline Mode",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                )
+
+                Text(
+                    text = if (isConnected) "AI Server Connected" else "Basic Features Available",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -256,6 +274,21 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 missingPermissions.toTypedArray(),
                 PERMISSIONS_REQUEST_CODE
             )
+        }
+
+        // Request WRITE_SETTINGS permission separately (it's special)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            if (!android.provider.Settings.System.canWrite(this)) {
+                Log.w(TAG, "WRITE_SETTINGS permission not granted")
+                val intent = Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                }
+                try {
+                    startActivityForResult(intent, WRITE_SETTINGS_REQUEST_CODE)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to request WRITE_SETTINGS permission", e)
+                }
+            }
         }
     }
 
@@ -448,8 +481,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 textToSpeech.setSpeechRate(0.9f)
 
                 Log.d(TAG, "TTS initialized successfully")
-                speak("Hello sir...... मैं ग्रूट हूं, आपका AI Assistant। आपकी मदद के लिए पूरी tarah तैयार हूं ।" +
-                        "sir.... क्या आप मुझे बता सकते हैं मैं आपके लिए क्या कर सकता हूं... या किस प्रकार आपकी help कर सकता हूं ।")
+                speak("मैं ग्रूट हूं, आपका AI सहायक। आपकी मदद के लिए तैयार हूं।")
             }
         } else {
             Log.e(TAG, "TTS initialization failed with status: $status")
@@ -472,6 +504,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         if (requestCode == PERMISSIONS_REQUEST_CODE) {
             val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
             if (allGranted) {
+
                 Log.d(TAG, "All permissions granted")
                 speak("All permissions granted. I'm ready to help!")
             } else {

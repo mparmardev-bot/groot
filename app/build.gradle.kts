@@ -89,18 +89,9 @@ dependencies {
     // Work Manager for background tasks
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
-    // Speech recognition
-    implementation("androidx.core:core-splashscreen:1.0.1")
+    // Speech recognition (remove core-splashscreen if not used)
+    // implementation("androidx.core:core-splashscreen:1.0.1") // Uncomment if needed
 
     // Permissions
     implementation("com.google.accompanist:accompanist-permissions:0.32.0")
-
-    // Testing
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.1.5")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2023.08.00"))
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
