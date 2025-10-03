@@ -26,6 +26,7 @@ class OfflineIntelligence {
      * Returns OfflineResponse with handled=true if successful
      */
     fun handleOffline(command: String): OfflineResponse {
+        Log.d(TAG, "original cmd : $command")
         val lowerCommand = command.lowercase().trim()
         val isHindi = command.matches(Regex(".*[\\u0900-\\u097F].*"))
 
@@ -36,6 +37,9 @@ class OfflineIntelligence {
             lowerCommand.contains("what is your name") ||
                     lowerCommand.contains("who are you") ||
                     lowerCommand.contains("your name") ||
+                    lowerCommand.contains("नाम") ||
+                    lowerCommand.contains("तुम्हारा नाम क्या है ") ||
+                    lowerCommand.contains("तेरा नाम क्या है") ||
                     lowerCommand.contains("आपका नाम क्या है") -> {
                 return OfflineResponse(
                     reply = if (isHindi) "मैं ग्रूट हूँ, आपका निजी AI सहायक। कॉल, मैसेज और दैनिक कार्यों में आपकी मदद करने के लिए यहाँ हूँ!"
@@ -48,6 +52,10 @@ class OfflineIntelligence {
 
             lowerCommand.contains("how are you") ||
                     lowerCommand.contains("kaise ho") ||
+                    lowerCommand.contains("गुरूट तुम कैसे हो") ||
+                    lowerCommand.contains("तुम कैसे हो") ||
+                    lowerCommand.contains("कैसा है") ||
+                    lowerCommand.contains("तू कैसा है") ||
                     lowerCommand.contains("how r u") -> {
                 return OfflineResponse(
                     reply = if (isHindi) "मैं बहुत अच्छा हूँ और आपकी मदद के लिए तैयार हूँ! आप आज कैसे हैं?"
@@ -62,6 +70,7 @@ class OfflineIntelligence {
                     lowerCommand.contains("hi groot") ||
                     lowerCommand.contains("हेलो") ||
                     lowerCommand.contains("हेलो हेलो") ||
+                    lowerCommand.contains("नमस्ते") ||
                     lowerCommand.contains("namaste") -> {
                 return OfflineResponse(
                     reply = if (isHindi) "नमस्ते! मैं ग्रूट, आपका AI सहायक हूँ। मैं आपकी कैसे मदद कर सकता हूँ?"
@@ -72,7 +81,9 @@ class OfflineIntelligence {
                 )
             }
 
-            lowerCommand.contains("good morning") -> {
+            lowerCommand.contains("good morning") ||
+                    lowerCommand.contains("गुड मॉर्निंग") ||
+                    lowerCommand.contains("सुप्रभात ☀\uFE0F") -> {
                 return OfflineResponse(
                     reply = if (isHindi) "सुप्रभात! आपके दिन की शानदार शुरुआत हो!"
                     else "Good morning! Hope you have a wonderful day ahead!",
@@ -82,7 +93,8 @@ class OfflineIntelligence {
                 )
             }
 
-            lowerCommand.contains("good night") -> {
+            lowerCommand.contains("good night") ||
+                    lowerCommand.contains("शुभ रात्रि") -> {
                 return OfflineResponse(
                     reply = if (isHindi) "शुभ रात्रि! अच्छे सपने देखें!"
                     else "Good night! Sleep well and sweet dreams!",
@@ -94,6 +106,8 @@ class OfflineIntelligence {
 
             lowerCommand.contains("thank you") ||
                     lowerCommand.contains("thanks") ||
+                    lowerCommand.contains("थैंक्यू सो मच \uD83D\uDE4F") ||
+                    lowerCommand.contains("धन्यवाद \uD83C\uDF38") ||
                     lowerCommand.contains("dhanyavad") -> {
                 return OfflineResponse(
                     reply = if (isHindi) "आपका स्वागत है! मैं हमेशा मदद के लिए यहाँ हूँ!"
@@ -106,6 +120,10 @@ class OfflineIntelligence {
 
             // Time queries
             lowerCommand.contains("time") ||
+                    lowerCommand.contains("समय क्या हुआ है") ||
+                    lowerCommand.contains("समय क्या है") ||
+                    lowerCommand.contains("अभी समय क्या हुआ है") ||
+                    lowerCommand.contains("समय") ||
                     lowerCommand.contains("samay") -> {
                 val currentTime = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
                 return OfflineResponse(
@@ -119,6 +137,15 @@ class OfflineIntelligence {
 
             // Date queries
             lowerCommand.contains("date") ||
+                    lowerCommand.contains("आज कौन-सी तारीख है") ||
+                    lowerCommand.contains("तारीख") ||
+                    lowerCommand.contains("आज तिथि क्या है") ||
+                    lowerCommand.contains("तारीख / दिनांक") ||
+                    lowerCommand.contains("आज की तारीख") ||
+                    lowerCommand.contains("टुडे डेट") ||
+                    lowerCommand.contains("डेट टुडे") ||
+                    lowerCommand.contains("आज तारीख क्या है") ||
+                    lowerCommand.contains("आज क्या तारीख है") ||
                     lowerCommand.contains("today") ||
                     lowerCommand.contains("tarikh") -> {
                 val currentDate = SimpleDateFormat("EEEE, MMMM dd, yyyy", Locale.getDefault()).format(Date())
@@ -133,7 +160,14 @@ class OfflineIntelligence {
 
             // Day queries
             lowerCommand.contains("what day") ||
-                    lowerCommand.contains("which day") -> {
+                    lowerCommand.contains("आज कौन सा दिन है?") ||
+                    lowerCommand.contains("आज दिन कौन सा है?") ||
+                    lowerCommand.contains("आज का दिन कौन सा है?") ||
+                    lowerCommand.contains("दिन क्या है आज?") ||
+                    lowerCommand.contains("आज सप्ताह का कौन सा दिन है") ||
+                    lowerCommand.contains("आज रविवार/सोमवार/मंगलवार… है क्या?") ||
+                    lowerCommand.contains("आज शुक्रवार है क्या?") ||
+                    lowerCommand.contains("आज शनिवार/रविवार… है क्या") -> {
                 val day = SimpleDateFormat("EEEE", Locale.getDefault()).format(Date())
                 return OfflineResponse(
                     reply = if (isHindi) "आज $day है"
@@ -147,6 +181,9 @@ class OfflineIntelligence {
             // Call commands
             lowerCommand.contains("call") ||
                     lowerCommand.contains("phone") ||
+                    lowerCommand.contains("कॉल मॉम") ||
+                    lowerCommand.contains("कॉल ") ||
+                    lowerCommand.contains("कॉल करो") ||
                     lowerCommand.contains("dial") -> {
                 val contact = extractContact(lowerCommand)
                 if (contact.isNotEmpty()) {

@@ -50,6 +50,7 @@ class GrootService : Service() {
     }
 
     fun processCommand(command: String, callback: (String, String, String) -> Unit) {
+        Log.d( TAG,"original cmd : $command")
         serviceScope.launch {
             try {
                 Log.d(TAG, "Processing: $command")
